@@ -1,4 +1,4 @@
-import { store, json } from "./_shared.mjs";
+import { store, json, referencePriceForCard } from "./_shared.mjs";
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const STARTER_WATCHES = "mar|77|nonfoil|4.00;znr|289|nonfoil|5.00";
@@ -11,13 +11,6 @@ function parseWatches() {
   }).filter(x => x.set && x.collectorNumber);
 }
 
-function priceFor(card, finish) {
-  const p = card.prices || {};
-  if (finish === "foil") return p.usd_foil ? Number(p.usd_foil) : null;
-  if (finish === "etched") return p.usd_etched ? Number(p.usd_etched) : null;
-  return p.usd ? Number(p.usd) : null;
-}
-
 export default async () => {
   const watches = parseWatches();
   const results = [];
@@ -25,10 +18,11 @@ export default async () => {
   for (const watch of watches) {
     try {
       const url = `https://api.scryfall.com/cards/${encodeURIComponent(watch.set.toLowerCase())}/${encodeURIComponent(watch.collectorNumber)}`;
-      const r = await fetch(url, { headers: { "user-agent": "MTGDealHunter/3.2", "accept": "application/json" } });
+      const r = await fetch(url, { headers: { "user-agent": "MTGDealHunter/3.3", "accept": "application/json" } });
       if (!r.ok) throw new Error(`Scryfall ${r.status}`);
       const card = await r.json();
-      const price = priceFor(card, watch.finish);
+      const ref = await referencePriceForCard(card, watch.finish);
+      const price = ref.price;
       results.push({
         id: card.id,
         name: card.name,
@@ -37,9 +31,11 @@ export default async () => {
         collector_number: card.collector_number,
         finish: watch.finish,
         price,
+        price_source: ref.source,
         target: watch.target,
         hit: Boolean(price != null && watch.target != null && price <= watch.target),
         scryfall_uri: card.scryfall_uri,
+        tcgplayer_id: card.tcgplayer_id || null,
         checked_at: new Date().toISOString()
       });
     } catch (error) {
@@ -50,7 +46,7 @@ export default async () => {
 
   const payload = {
     ok: true,
-    source: "Scryfall exact-printing prices",
+    source: results.some(x=>x.price_source==="TCGplayer Market") ? "TCGplayer Market" : "Scryfall USD fallback",
     configured: watches.length,
     hits: results.filter(x => x.hit).length,
     updated_at: new Date().toISOString(),
