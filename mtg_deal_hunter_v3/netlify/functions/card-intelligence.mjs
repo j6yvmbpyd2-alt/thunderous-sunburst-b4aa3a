@@ -21,6 +21,18 @@ function trend(prices){
   return one>=0?'Firming':'Softening';
 }
 
+async function historicalFor(req,id){
+  try{
+    const url=new URL('/data/mtgjson-history.json',req.url);
+    const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(4000)});
+    if(!r.ok)return null;
+    const d=await r.json();
+    const rec=d?.cards?.[id];
+    if(!rec||!Array.isArray(rec.points))return null;
+    return {meta:{source:d.source,provider:rec.provider||d.provider,resolution:d.resolution||'daily'},points:rec.points};
+  }catch{return null}
+}
+
 export default async(req)=>{
   try{
     const id=new URL(req.url).searchParams.get('id');
@@ -28,34 +40,50 @@ export default async(req)=>{
     const data=await store().get('top20-tracker',{type:'json',consistency:'strong'}).catch(()=>null);
     if(!data)return json({ok:false,error:'Tracker has not run yet'},404);
     const card=(data.top20||[]).find(x=>x.id===id);
-    const points=Array.isArray(data.history?.[id])?data.history[id]:[];
+    const livePoints=Array.isArray(data.history?.[id])?data.history[id]:[];
     if(!card)return json({ok:false,error:'Card is not in the current Top 20'},404);
-    const prices=points.map(x=>Number(x.price)).filter(x=>x>0);
-    const sorted=[...prices].sort((a,b)=>a-b);
-    const current=Number(card.price)||prices.at(-1)||null;
-    const med=quantile(sorted,.5),q25=quantile(sorted,.25),q10=quantile(sorted,.10),mean=avg(prices);
+
+    const hist=await historicalFor(req,id);
+    const daily=(hist?.points||[]).map(x=>({t:Date.parse(x.date+'T12:00:00Z'),price:Number(x.price),source:'MTGJSON daily'})).filter(x=>x.t&&x.price>0);
+    const live=livePoints.map(x=>({t:Number(x.t),price:Number(x.price),source:'live hourly'})).filter(x=>x.t&&x.price>0);
+    const all=[...daily,...live].sort((a,b)=>a.t-b.t);
+    const historicalPrices=daily.map(x=>x.price);
+    const livePrices=live.map(x=>x.price);
+    const basis=historicalPrices.length>=14?historicalPrices:livePrices;
+    const sorted=[...basis].sort((a,b)=>a-b);
+    const current=Number(card.price)||livePrices.at(-1)||historicalPrices.at(-1)||null;
+    const med=quantile(sorted,.5),q25=quantile(sorted,.25),q10=quantile(sorted,.10),mean=avg(basis);
     const fairBuy=med?Math.min(med*.96,q25||med):current;
     const strongBuy=q10?Math.min(q10,fairBuy*.94):fairBuy?fairBuy*.94:current;
     const below=sorted.filter(x=>x<=current).length;
     const percentile=sorted.length?Math.round((below/sorted.length)*100):null;
-    const historyDepth=prices.length;
-    const evidenceScore=clamp(Math.round(historyDepth/24*35),5,35);
+
+    const historicalConfidence=clamp(Math.round(historicalPrices.length/90*95),0,95);
+    const liveConfidence=clamp(Math.round(livePrices.length/24*95),5,95);
     const edge=fairBuy&&current?Math.max(0,pct(fairBuy,current)):0;
     const modelConfidence=Number(card.confidence)||50;
-    const buyConfidence=clamp(Math.round(modelConfidence*.55+evidenceScore+Math.min(20,edge*2)),20,97);
+    const buyConfidence=clamp(Math.round(modelConfidence*.30+historicalConfidence*.35+liveConfidence*.20+Math.min(15,edge*1.5)),20,97);
+
+    const liveTrend=trend(livePrices.length?livePrices:historicalPrices.slice(-7));
     let decision='WAIT';
     if(current&&strongBuy&&current<=strongBuy&&buyConfidence>=70)decision='BUY';
     else if(current&&fairBuy&&current<=fairBuy&&buyConfidence>=60)decision='BUY';
-    else if(card.action==='PASS'||trend(prices)==='Overheated')decision='PASS';
-    const range24=prices.slice(-24),range72=prices.slice(-72),range168=prices.slice(-168);
+    else if(card.action==='PASS'||liveTrend==='Overheated')decision='PASS';
+
+    const daily30=historicalPrices.slice(-30),daily90=historicalPrices.slice(-90),range24=livePrices.slice(-24);
     return json({
       ok:true,
       card,
       intelligence:{
-        current,mean,median:med,fair_buy:fairBuy,strong_buy:strongBuy,percentile,trend:trend(prices),decision,buy_confidence:buyConfidence,history_points:historyDepth,
-        avg24:avg(range24),avg72:avg(range72),avg168:avg(range168),low24:range24.length?Math.min(...range24):null,high24:range24.length?Math.max(...range24):null
+        current,mean,median:med,fair_buy:fairBuy,strong_buy:strongBuy,percentile,trend:liveTrend,decision,buy_confidence:buyConfidence,
+        historical_confidence:historicalConfidence,live_confidence:liveConfidence,
+        historical_points:historicalPrices.length,live_points:livePrices.length,history_points:all.length,
+        avg24:avg(range24),low24:range24.length?Math.min(...range24):null,high24:range24.length?Math.max(...range24):null,
+        avg30:avg(daily30),low30:daily30.length?Math.min(...daily30):null,high30:daily30.length?Math.max(...daily30):null,
+        avg90:avg(daily90),low90:daily90.length?Math.min(...daily90):null,high90:daily90.length?Math.max(...daily90):null,
+        history_source:hist?.meta||null
       },
-      history:points.map(x=>({t:x.t,price:Number(x.price)}))
+      history:all
     });
   }catch(e){return json({ok:false,error:e.message||'Intelligence lookup failed'},500)}
 };
