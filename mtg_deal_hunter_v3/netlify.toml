@@ -7,3 +7,6 @@
 
 [functions."scan-deals"]
   schedule = "@hourly"
+
+[functions."price-watch"]
+  schedule = "@hourly"
