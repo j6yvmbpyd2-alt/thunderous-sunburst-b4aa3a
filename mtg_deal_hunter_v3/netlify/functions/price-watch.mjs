@@ -1,9 +1,10 @@
 import { json } from "./_shared.mjs";
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const STARTER_WATCHES = "mar|77|nonfoil|4.00;znr|289|nonfoil|5.00";
 
 function parseWatches() {
-  const raw = process.env.SCRYFALL_WATCHES || "";
+  const raw = process.env.SCRYFALL_WATCHES || STARTER_WATCHES;
   return raw.split(";").map(x => x.trim()).filter(Boolean).slice(0, 40).map(entry => {
     const [set, collectorNumber, finish = "nonfoil", target = ""] = entry.split("|").map(x => x.trim());
     return { set, collectorNumber, finish: finish.toLowerCase(), target: Number(target) || null };
