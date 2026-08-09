@@ -1,4 +1,4 @@
-const CACHE='mtg-deal-hunter-v3-4';
+const CACHE='mtg-deal-hunter-v3-5';
 const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js'];
 
 self.addEventListener('install',e=>{
@@ -14,12 +14,24 @@ self.addEventListener('activate',e=>{
   })());
 });
 
+function repairDynamicLinks(html){
+  html=html.replaceAll(
+    `onclick=\"window.open(\${JSON.stringify(x.url)},'_blank')\"`,
+    `data-url=\"\${encodeURIComponent(x.url)}\" onclick=\"location.href=decodeURIComponent(this.dataset.url)\"`
+  );
+  html=html.replaceAll(
+    `onclick=\"window.open(\${JSON.stringify(w.scryfall_uri)},'_blank')\"`,
+    `data-url=\"\${encodeURIComponent(w.scryfall_uri)}\" onclick=\"location.href=decodeURIComponent(this.dataset.url)\"`
+  );
+  return html;
+}
+
 async function patchedNavigationResponse(request){
   const fresh=await fetch(request,{cache:'no-store'});
   const type=fresh.headers.get('content-type')||'';
   if(!type.includes('text/html')) return fresh;
 
-  let html=await fresh.text();
+  let html=repairDynamicLinks(await fresh.text());
   if(!html.includes('link-fix.js')) html=html.replace('</body>','<script src="/link-fix.js"></script></body>');
   const headers=new Headers(fresh.headers);
   headers.set('content-type','text/html; charset=utf-8');
