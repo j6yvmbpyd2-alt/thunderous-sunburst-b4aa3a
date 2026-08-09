@@ -1,5 +1,5 @@
-const CACHE='mtg-deal-hunter-v3-5';
-const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js'];
+const CACHE='mtg-deal-hunter-v3-6-preview';
+const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js','tracker-ui.js'];
 
 self.addEventListener('install',e=>{
   self.skipWaiting();
@@ -11,6 +11,31 @@ self.addEventListener('activate',e=>{
     const keys=await caches.keys();
     await Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)));
     await self.clients.claim();
+  })());
+});
+
+self.addEventListener('push',event=>{
+  let data={title:'MTG Deal Hunter',body:'A watched card changed.',url:'/?tab=tracker',tag:'mtg-alert'};
+  try{data={...data,...event.data.json()}}catch{}
+  event.waitUntil(self.registration.showNotification(data.title||'MTG Deal Hunter',{
+    body:data.body||'',
+    icon:'/icon.svg',
+    badge:'/icon.svg',
+    tag:data.tag||'mtg-alert',
+    data:{url:data.url||'/?tab=tracker'}
+  }));
+});
+
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  const target=new URL(event.notification.data?.url||'/?tab=tracker',self.location.origin).href;
+  event.waitUntil((async()=>{
+    const clientsList=await clients.matchAll({type:'window',includeUncontrolled:true});
+    for(const client of clientsList){
+      if('navigate'in client) await client.navigate(target);
+      return client.focus();
+    }
+    return clients.openWindow(target);
   })());
 });
 
@@ -30,9 +55,9 @@ async function patchedNavigationResponse(request){
   const fresh=await fetch(request,{cache:'no-store'});
   const type=fresh.headers.get('content-type')||'';
   if(!type.includes('text/html')) return fresh;
-
   let html=repairDynamicLinks(await fresh.text());
   if(!html.includes('link-fix.js')) html=html.replace('</body>','<script src="/link-fix.js"></script></body>');
+  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js"></script></body>');
   const headers=new Headers(fresh.headers);
   headers.set('content-type','text/html; charset=utf-8');
   headers.set('cache-control','no-store');
@@ -42,7 +67,6 @@ async function patchedNavigationResponse(request){
 self.addEventListener('fetch',e=>{
   const u=new URL(e.request.url);
   if(u.pathname.startsWith('/.netlify/functions/')||u.hostname==='api.scryfall.com') return;
-
   if(e.request.mode==='navigate'){
     e.respondWith((async()=>{
       try{
@@ -50,19 +74,12 @@ self.addEventListener('fetch',e=>{
         const cache=await caches.open(CACHE);
         cache.put('index.html',fresh.clone());
         return fresh;
-      }catch{
-        return (await caches.match('index.html')) || Response.error();
-      }
+      }catch{return (await caches.match('index.html'))||Response.error();}
     })());
     return;
   }
-
   e.respondWith((async()=>{
-    const cached=await caches.match(e.request);
-    if(cached) return cached;
-    const fresh=await fetch(e.request);
-    const cache=await caches.open(CACHE);
-    cache.put(e.request,fresh.clone());
-    return fresh;
+    const cached=await caches.match(e.request); if(cached) return cached;
+    const fresh=await fetch(e.request); const cache=await caches.open(CACHE); cache.put(e.request,fresh.clone()); return fresh;
   })());
 });
