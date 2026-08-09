@@ -1,5 +1,5 @@
-const CACHE='mtg-deal-hunter-v3-3';
-const ASSETS=['./','index.html','manifest.webmanifest','icon.svg'];
+const CACHE='mtg-deal-hunter-v3-4';
+const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js'];
 
 self.addEventListener('install',e=>{
   self.skipWaiting();
@@ -19,7 +19,8 @@ async function patchedNavigationResponse(request){
   const type=fresh.headers.get('content-type')||'';
   if(!type.includes('text/html')) return fresh;
 
-  const html=(await fresh.text()).replaceAll('window.open(','location.assign(');
+  let html=await fresh.text();
+  if(!html.includes('link-fix.js')) html=html.replace('</body>','<script src="/link-fix.js"></script></body>');
   const headers=new Headers(fresh.headers);
   headers.set('content-type','text/html; charset=utf-8');
   headers.set('cache-control','no-store');
