@@ -1,10 +1,11 @@
-import { json } from './_shared.mjs';
+import { json, store } from './_shared.mjs';
 
 function normalizeCategory(v){const x=String(v||'any').toLowerCase().trim();return x==='boarderless'?'borderless':x==='boarderless-secret-lair'?'borderless-secret-lair':x}
 function imageFor(card){return card.image_uris?.normal||card.card_faces?.[0]?.image_uris?.normal||null}
 function priceFor(card,finish){const p=card.prices||{};if(finish==='foil')return Number(p.usd_foil)||null;if(finish==='etched')return Number(p.usd_etched)||null;return Number(p.usd)||null}
 function isBorderless(card){return card.border_color==='borderless'||(card.frame_effects||[]).includes('extendedart')||(card.promo_types||[]).includes('boosterfun')&&card.full_art===true}
 function treatments(card){const a=[];if(isBorderless(card))a.push('borderless');for(const x of card.frame_effects||[])a.push(x);for(const x of card.promo_types||[])a.push(x);if(card.set==='sld')a.push('Secret Lair');return [...new Set(a)]}
+async function enroll(results){try{const s=store(),old=(await s.get('searched-card-registry',{type:'json',consistency:'strong'}).catch(()=>null))||{cards:[],cursor:0},map=new Map((old.cards||[]).map(x=>[x.id+'|'+x.finish,x])),now=new Date().toISOString();for(const x of results){const k=x.id+'|'+x.finish;map.set(k,{id:x.id,finish:x.finish,name:x.name,set:x.set,collector_number:x.collector_number,last_searched_at:now});}const cards=[...map.values()].sort((a,b)=>String(a.last_searched_at).localeCompare(String(b.last_searched_at))).slice(-2000);await s.setJSON('searched-card-registry',{cards,cursor:Number(old.cursor||0)%Math.max(1,cards.length),updated_at:now});}catch{}}
 
 export default async req=>{try{
   const u=new URL(req.url),name=(u.searchParams.get('name')||'').trim(),category=normalizeCategory(u.searchParams.get('category')),finish=(u.searchParams.get('finish')||'any').toLowerCase();
@@ -19,7 +20,7 @@ export default async req=>{try{
   if(finish==='etched')terms.push('is:etched');
   let next=`https://api.scryfall.com/cards/search?unique=prints&order=released&dir=desc&q=${encodeURIComponent(terms.join(' '))}`,cards=[];
   for(let page=0;page<6&&next;page++){
-    const r=await fetch(next,{headers:{'user-agent':'MTGDealHunter/4.8','accept':'application/json'}});
+    const r=await fetch(next,{headers:{'user-agent':'MTGDealHunter/4.9','accept':'application/json'}});
     if(!r.ok){const e=await r.json().catch(()=>({}));return json({ok:false,error:e.details||'No matching printings found'},404)}
     const d=await r.json();cards.push(...(d.data||[]));next=d.has_more?d.next_page:null;
   }
@@ -32,5 +33,6 @@ export default async req=>{try{
     }
   }
   results.sort((a,b)=>String(b.released_at||'').localeCompare(String(a.released_at||''))||a.set_name.localeCompare(b.set_name)||String(a.collector_number).localeCompare(String(b.collector_number)));
-  return json({ok:true,name,category,finish,count:results.length,results:results.slice(0,160)});
+  const limited=results.slice(0,160);await enroll(limited);
+  return json({ok:true,name,category,finish,count:results.length,results:limited,tracking_enrolled:limited.length});
 }catch(e){return json({ok:false,error:e.message||'Printing search failed'},500)}};
