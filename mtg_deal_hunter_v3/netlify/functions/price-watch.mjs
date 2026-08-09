@@ -1,4 +1,4 @@
-import { json } from "./_shared.mjs";
+import { store, json } from "./_shared.mjs";
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const STARTER_WATCHES = "mar|77|nonfoil|4.00;znr|289|nonfoil|5.00";
@@ -25,7 +25,7 @@ export default async () => {
   for (const watch of watches) {
     try {
       const url = `https://api.scryfall.com/cards/${encodeURIComponent(watch.set.toLowerCase())}/${encodeURIComponent(watch.collectorNumber)}`;
-      const r = await fetch(url, { headers: { "user-agent": "MTGDealHunter/3.1", "accept": "application/json" } });
+      const r = await fetch(url, { headers: { "user-agent": "MTGDealHunter/3.2", "accept": "application/json" } });
       if (!r.ok) throw new Error(`Scryfall ${r.status}`);
       const card = await r.json();
       const price = priceFor(card, watch.finish);
@@ -48,11 +48,15 @@ export default async () => {
     await sleep(110);
   }
 
-  return json({
+  const payload = {
     ok: true,
     source: "Scryfall exact-printing prices",
     configured: watches.length,
     hits: results.filter(x => x.hit).length,
+    updated_at: new Date().toISOString(),
     watches: results
-  });
+  };
+
+  try { await store().setJSON("price-watches", payload); } catch {}
+  return json(payload);
 };
