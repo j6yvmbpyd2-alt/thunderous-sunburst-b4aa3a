@@ -13,8 +13,9 @@ function isGenericStaple(card){return ['sol ring','command tower','arcane signet
 function verdict(score,s,historyPoints,consistency,baselineQuality,regimeShift){
   const evidence=[s.value>=12,s.momentum>=3,s.demand>=8,s.premium>=8,s.penalties===0,historyPoints>=30,consistency>=80,baselineQuality>=80].filter(Boolean).length;
   let action='PASS';
-  if(score>=48&&s.value>=10&&s.penalties<12&&consistency>=65&&baselineQuality>=65&&!regimeShift)action='BUY'; else if(score>=28)action='WATCH';
+  if(score>=48&&s.value>=10&&s.penalties<12&&consistency>=65&&baselineQuality>=65&&!regimeShift&&historyPoints>=14)action='BUY'; else if(score>=28)action='WATCH';
   let confidence=clamp(Math.round(26+evidence*8+Math.min(22,s.value/2)+Math.min(10,s.momentum)-Math.min(20,s.penalties)),25,95);
+  if(historyPoints<14){confidence=Math.min(confidence,54);if(action==='BUY')action='WATCH'}
   if(consistency<80||baselineQuality<80)confidence=Math.min(confidence,84);
   if(consistency<65||baselineQuality<65)confidence=Math.min(confidence,69);
   if(regimeShift){confidence=Math.min(confidence,64);if(action==='BUY')action='WATCH'}
@@ -27,28 +28,29 @@ export default async()=>{
   try{
     const q=`game:paper usd>=${PRICE_MIN} usd<=${PRICE_MAX} -is:reserved`;
     const url=`https://api.scryfall.com/cards/search?unique=cards&order=edhrec&dir=asc&q=${encodeURIComponent(q)}`;
-    const [r,historical]=await Promise.all([fetch(url,{headers:{'user-agent':'MTGDealHunter/4.2','accept':'application/json'}}),loadHistoricalCache()]);
+    const [r,historical]=await Promise.all([fetch(url,{headers:{'user-agent':'MTGDealHunter/4.3','accept':'application/json'}}),loadHistoricalCache()]);
     if(!r.ok)throw new Error(`Scryfall ${r.status}`);
     const data=await r.json(),candidates=(data.data||[]).slice(0,120).filter(c=>usd(c));
-    const s=store(),old=await s.get('top20-tracker',{type:'json',consistency:'strong'}).catch(()=>null),history=old?.history&&typeof old.history==='object'?old.history:{},oldTop=Array.isArray(old?.top20)?old.top20:[],now=Date.now();
+    const s=store(),old=await s.get('top20-tracker',{type:'json',consistency:'strong'}).catch(()=>null),history=old?.history&&typeof old.history==='object'?old.history:{},oldTop=Array.isArray(old?.top20)?old.top20:[],now=Date.now(),historicalSeries={};
 
     const ranked=candidates.map((card,index)=>{
       const livePrice=usd(card),points=Array.isArray(history[card.id])?history[card.id]:[],recent=points.map(x=>Number(x.price)).filter(x=>x>0),previous=recent.at(-1)||null;
       const a6=avg(recent.slice(-6)),a24=avg(recent.slice(-24)),a72=avg(recent.slice(-72));
       const move1=previous?pct(livePrice,previous):0,vs6=a6?pct(livePrice,a6):0,drop24=a24?pct(livePrice,a24):0,drop72=a72?pct(livePrice,a72):0;
 
-      const hp=(historical?.cards?.[card.id]?.points||[]).map(x=>Number(x.price)).filter(x=>x>0),h30=hp.slice(-30),h90=hp.slice(-90),h14=hp.slice(-14),prior=hp.slice(-74,-14),h7=hp.slice(-7);
+      const rec=historical?.cards?.[card.id]||null;
+      const hp=(rec?.points||[]).map(x=>Number(x.price)).filter(x=>x>0),h30=hp.slice(-30),h90=hp.slice(-90),h14=hp.slice(-14),prior=hp.slice(-74,-14),h7=hp.slice(-7);
+      if(rec?.points?.length)historicalSeries[card.id]={provider:rec.provider||'tcgplayer',list:rec.list||'retail',finish:rec.finish||'normal',points:rec.points.slice(-90)};
       const histCurrent=hp.at(-1)||null,med30=median(h30),med90=median(h90),med14=median(h14),medPrior=median(prior),avg7=avg(h7);
       const histVs30=med30&&histCurrent?pct(histCurrent,med30):0,histVs90=med90&&histCurrent?pct(histCurrent,med90):0,histTrend=avg7&&med30?pct(avg7,med30):0;
       const sorted90=[...h90].sort((a,b)=>a-b),percentile90=sorted90.length&&histCurrent?Math.round((sorted90.filter(x=>x<=histCurrent).length/sorted90.length)*100):null,q25=quantile(sorted90,.25),q75=quantile(sorted90,.75),belowQ25=q25&&histCurrent<q25?pct(histCurrent,q25):0;
       const iqr=q25!=null&&q75!=null?q75-q25:null,outlierShare=iqr!=null&&iqr>0?h90.filter(x=>x<q25-1.5*iqr||x>q75+1.5*iqr).length/Math.max(1,h90.length):0;
       const regimeDelta=med14&&medPrior?pct(med14,medPrior):0;
       const regimeShift=hp.length>=30&&Math.abs(regimeDelta)>=35;
-      const baselineQuality=regimeShift?45:outlierShare>.25?55:outlierShare>.15?70:90;
+      const baselineQuality=hp.length<14?35:regimeShift?45:outlierShare>.25?55:outlierShare>.15?70:90;
 
-      // Compare live Scryfall and latest MTGJSON only as a consistency test, never as a historical discount calculation.
       const sourceGap=histCurrent?Math.abs(pct(livePrice,histCurrent)):null;
-      const consistency=sourceGap==null?45:sourceGap<=8?95:sourceGap<=15?85:sourceGap<=25?70:sourceGap<=40?55:35;
+      const consistency=sourceGap==null?35:sourceGap<=8?95:sourceGap<=15?85:sourceGap<=25?70:sourceGap<=40?55:35;
       const histWeight=(consistency>=80?1:consistency>=65?.7:consistency>=50?.4:.15)*(baselineQuality>=80?1:baselineQuality>=65?.6:baselineQuality>=50?.3:.12);
 
       const demandScore=clamp(12-(index/120)*10,2,12);
@@ -58,7 +60,7 @@ export default async()=>{
       const momentumScore=clamp(Math.max(0,move1)*3+(histTrend>1?Math.min(8,histTrend*1.1)*histWeight:0),0,16);
       const entryScore=livePrice>=4&&livePrice<=25?10:livePrice>25&&livePrice<=45?6:livePrice>=2&&livePrice<4?4:1;
       const premium=isPremium(card),premiumScore=premium?8:0,supplyRisk=(card.reprint&&!premium?5:0)+(card.digital?4:0),noLiveEdge=drop24>-2&&drop72>-3&&vs6>-1.5&&move1<1,noHistoricalEdge=histVs30>-3&&histVs90>-5&&(percentile90===null||percentile90>40),noEdge=noLiveEdge&&noHistoricalEdge;
-      const genericPenalty=isGenericStaple(card)&&noEdge?18:0,chasePenalty=move1>=8&&histVs30>-5?12:move1>=4&&histVs30>-3?6:0,historicalChasePenalty=histVs30>=12&&histTrend>=5?8:0,consistencyPenalty=consistency<50?14:consistency<65?8:consistency<80?3:0,baselinePenalty=regimeShift?14:baselineQuality<65?8:baselineQuality<80?3:0;
+      const genericPenalty=isGenericStaple(card)&&noEdge?18:0,chasePenalty=move1>=8&&histVs30>-5?12:move1>=4&&histVs30>-3?6:0,historicalChasePenalty=histVs30>=12&&histTrend>=5?8:0,consistencyPenalty=consistency<50?14:consistency<65?8:consistency<80?3:0,baselinePenalty=hp.length<14?18:regimeShift?14:baselineQuality<65?8:baselineQuality<80?3:0;
       const penalties=supplyRisk+genericPenalty+chasePenalty+historicalChasePenalty+consistencyPenalty+baselinePenalty;
       const score=Math.round((valueScore+momentumScore+entryScore+premiumScore+demandScore-penalties)*10)/10;
       const reasons=[];
@@ -66,8 +68,9 @@ export default async()=>{
       if(histVs30<=-5)reasons.push(`${Math.abs(histVs30).toFixed(1)}% below robust 30d median`);
       if(histVs90<=-8)reasons.push(`${Math.abs(histVs90).toFixed(1)}% below robust 90d median`);
       if(percentile90!==null&&percentile90<=20)reasons.push(`bottom ${percentile90}% of 90d historical prices`);
+      if(hp.length<14)reasons.push('insufficient shared historical data — high-confidence BUY blocked');
       if(regimeShift)reasons.push(`structural repricing detected (${regimeDelta.toFixed(1)}% regime shift) — old baseline down-weighted`);
-      else if(outlierShare>.15)reasons.push(`historical outliers detected — baseline confidence reduced`);
+      else if(outlierShare>.15)reasons.push('historical outliers detected — baseline confidence reduced');
       if(sourceGap!=null&&sourceGap>15)reasons.push(`price sources differ ${sourceGap.toFixed(1)}% — confidence reduced`);
       if(move1>=1&&move1<8)reasons.push(`turning up ${move1.toFixed(1)}% since last check`);
       if(premium)reasons.push(card.set==='sld'||String(card.set_name||'').toLowerCase().includes('secret lair')?'premium Secret Lair printing':'premium treatment');
@@ -80,9 +83,9 @@ export default async()=>{
     }).sort((a,b)=>b.score-a.score);
 
     const top20=ranked.slice(0,20).map((x,i)=>({...x,rank:i+1})),oldIds=new Set(oldTop.map(x=>x.id)),entrants=top20.filter(x=>!oldIds.has(x.id));
-    const payload={ok:true,model:'opportunity-v6-regime-aware',updated_at:new Date().toISOString(),top20,history,candidate_count:candidates.length,historical_matches:Object.keys(historical?.cards||{}).length};
+    const payload={ok:true,model:'opportunity-v7-shared-history',updated_at:new Date().toISOString(),top20,history,historical:historicalSeries,candidate_count:candidates.length,historical_matches:Object.keys(historicalSeries).length};
     await s.setJSON('top20-tracker',payload);
     if(oldTop.length&&entrants.length){const lead=entrants[0];await sendPush({title:'MTG Watch Tracker',body:`${lead.action}: ${lead.name} entered #${lead.rank} (${lead.confidence}% confidence)`,url:'/?tab=tracker',tag:'top20-entry'}).catch(()=>{})}
-    return json({...payload,history:undefined,entrants:entrants.map(x=>x.name)});
+    return json({...payload,history:undefined,historical:undefined,entrants:entrants.map(x=>x.name)});
   }catch(e){return json({ok:false,error:e.message||'Top 20 scan failed'},500)}
 };
