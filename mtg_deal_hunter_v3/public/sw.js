@@ -1,4 +1,4 @@
-const CACHE='mtg-deal-hunter-v3-2';
+const CACHE='mtg-deal-hunter-v3-3';
 const ASSETS=['./','index.html','manifest.webmanifest','icon.svg'];
 
 self.addEventListener('install',e=>{
@@ -14,6 +14,18 @@ self.addEventListener('activate',e=>{
   })());
 });
 
+async function patchedNavigationResponse(request){
+  const fresh=await fetch(request,{cache:'no-store'});
+  const type=fresh.headers.get('content-type')||'';
+  if(!type.includes('text/html')) return fresh;
+
+  const html=(await fresh.text()).replaceAll('window.open(','location.assign(');
+  const headers=new Headers(fresh.headers);
+  headers.set('content-type','text/html; charset=utf-8');
+  headers.set('cache-control','no-store');
+  return new Response(html,{status:fresh.status,statusText:fresh.statusText,headers});
+}
+
 self.addEventListener('fetch',e=>{
   const u=new URL(e.request.url);
   if(u.pathname.startsWith('/.netlify/functions/')||u.hostname==='api.scryfall.com') return;
@@ -21,7 +33,7 @@ self.addEventListener('fetch',e=>{
   if(e.request.mode==='navigate'){
     e.respondWith((async()=>{
       try{
-        const fresh=await fetch(e.request,{cache:'no-store'});
+        const fresh=await patchedNavigationResponse(e.request);
         const cache=await caches.open(CACHE);
         cache.put('index.html',fresh.clone());
         return fresh;
