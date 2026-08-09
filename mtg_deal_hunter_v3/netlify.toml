@@ -16,3 +16,6 @@
 
 [functions."breakout-run"]
   schedule = "@hourly"
+
+[functions."tracked-price-run"]
+  schedule = "@hourly"
