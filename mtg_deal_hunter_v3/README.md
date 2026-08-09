@@ -5,83 +5,39 @@ This is a deploy-ready version of MTG Deal Hunter with:
 - the iPhone/PWA singles, sealed, portfolio, watchlist, and BUY/WATCH/PASS tools from v2
 - a **Deals** tab backed by Netlify Functions
 - persistent deal storage using **Netlify Blobs**
-- an **hourly scheduled scanner**
-- exact-printing reference pricing for singles, preferring **TCGplayer Market** when TCGplayer API credentials are configured
-- a safe Scryfall USD fallback when TCGplayer credentials are unavailable
-- configurable external deal-feed adapters
-- a protected manual ingestion endpoint
-
-## Deploy
-
-Upload/deploy the **contents of this folder as a Netlify project**, not just the `public` folder. Netlify needs `netlify.toml`, `package.json`, `public/`, and `netlify/functions/` together so it can deploy the Functions.
-
-If your current site was created by drag-and-drop, the most reliable way to enable Functions is to connect this folder through a Git repository or use Netlify CLI (`netlify deploy --prod`). A static-only upload of `public/` will run the PWA but will not install the backend Functions.
-
-The repository is now public so Netlify's free-plan private-repository contributor restriction no longer blocks automated Git commits from deploying.
+- hourly price/deal scans
+- exact-printing reference pricing for singles
+- a preview **Trackers** tab with Top 20 watch signals and sales-velocity breakouts
+- preview Web Push notifications for target hits, Top 20 entrants, and verified breakouts
 
 ## Environment variables
 
 In Netlify: Project configuration → Environment variables.
 
-Optional:
+Push notifications:
+
+- `VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
+- optional `VAPID_SUBJECT`
+
+Breakout scanner:
+
+- `SALES_FEED_URLS` — comma-separated HTTPS JSON feeds containing real sold-count snapshots
+- optional `BREAKOUT_MIN_SALES` — default `8`
+- optional `BREAKOUT_MIN_MULTIPLIER` — default `2.5`
+
+Other optional variables:
 
 - `DEAL_THRESHOLD` — default `25`
 - `DEAL_FEED_URLS` — comma-separated HTTPS JSON feed URLs
-- `DEAL_ADMIN_TOKEN` — a long random secret used by `submit-deal`
-- `TCGPLAYER_PUBLIC_KEY` — existing TCGplayer API developer public key/client ID
-- `TCGPLAYER_PRIVATE_KEY` — existing TCGplayer API developer private key/client secret
+- `DEAL_ADMIN_TOKEN`
+- `TCGPLAYER_PUBLIC_KEY`
+- `TCGPLAYER_PRIVATE_KEY`
 
-When both TCGplayer keys are present, single-card reference prices and the scheduled server price watches prefer TCGplayer `marketPrice`. If the credentials are missing, authentication fails, or an exact TCGplayer product cannot be matched, the backend falls back to the matching Scryfall USD price rather than breaking the scanner.
+## Preview test endpoints
 
-### Feed JSON format
+- `/.netlify/functions/top20-now` — manually seed/refresh Top 20
+- `/.netlify/functions/breakout-now` — manually run breakout scan
+- `/.netlify/functions/push-test` — send a test push to saved subscriptions
 
-Each configured URL can return either an array or `{ "deals": [...] }`.
-
-Example single (market price can be omitted if exact card fields are supplied):
-
-```json
-{
-  "type": "single",
-  "name": "Force of Vigor",
-  "card_name": "Force of Vigor",
-  "set": "mar",
-  "collector_number": "77",
-  "finish": "nonfoil",
-  "condition": "NM",
-  "store": "Example Games",
-  "price": 4.25,
-  "url": "https://example.com/listing"
-}
-```
-
-Example sealed product (the adapter must supply a trustworthy exact-product reference market price):
-
-```json
-{
-  "type": "sealed",
-  "name": "Example Collector Booster Display",
-  "store": "Example Games",
-  "price": 149.99,
-  "market_price": 209.99,
-  "detail": "12-pack collector display",
-  "url": "https://example.com/product"
-}
-```
-
-The scanner only stores deals at or above the configured percentage discount.
-
-## Functions
-
-- `/.netlify/functions/health` — backend health check
-- `/.netlify/functions/deals` — current qualifying feed plus server price watches
-- `price-watch` — scheduled `@hourly`; prefers TCGplayer Market when configured
-- `scan-deals` — scheduled `@hourly`; also has a **Run now** control in Netlify's Functions UI
-- `/.netlify/functions/submit-deal` — protected POST ingestion endpoint
-
-## Important limitation
-
-v3 intentionally does **not** blindly scrape arbitrary game-store HTML. Store sites differ, may change markup, may prohibit automated access, and raw page prices can misidentify product configurations. Instead, `DEAL_FEED_URLS` is the adapter boundary: connect structured feeds or small store-specific adapters that you control/are permitted to query. This avoids false bargains and makes exact-product matching much safer.
-
-## iPhone refresh after redeploy
-
-After deploying v3, open the site in Safari once. If the old v2 UI persists, close the Home Screen app and reopen it; the v3 service worker replaces the old cache. If needed, remove/re-add the Home Screen icon after visiting the v3 site in Safari.
+Scheduled hourly runs only take effect after the feature is eventually published to production. Keep this branch in preview until the UI and push flow are verified.
