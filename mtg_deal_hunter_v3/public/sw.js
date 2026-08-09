@@ -1,4 +1,4 @@
-const CACHE='mtg-deal-hunter-v3-11-preview';
+const CACHE='mtg-deal-hunter-v3-12-calibration';
 const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js'];
 
 self.addEventListener('install',e=>{
@@ -44,9 +44,9 @@ async function patchedNavigationResponse(request){
   if(!type.includes('text/html')) return fresh;
   let html=repairDynamicLinks(await fresh.text());
   if(!html.includes('link-fix.js')) html=html.replace('</body>','<script src="/link-fix.js"></script></body>');
-  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js?v=11"></script></body>');
-  if(!html.includes('intelligence-ui.js')) html=html.replace('</body>','<script src="/intelligence-ui.js?v=4"></script></body>');
-  if(!html.includes('deals-refresh-fix.js')) html=html.replace('</body>','<script src="/deals-refresh-fix.js?v=3"></script></body>');
+  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js?v=12"></script></body>');
+  if(!html.includes('intelligence-ui.js')) html=html.replace('</body>','<script src="/intelligence-ui.js?v=5"></script></body>');
+  if(!html.includes('deals-refresh-fix.js')) html=html.replace('</body>','<script src="/deals-refresh-fix.js?v=4"></script></body>');
   const headers=new Headers(fresh.headers);
   headers.set('content-type','text/html; charset=utf-8');
   headers.set('cache-control','no-store');
@@ -56,28 +56,13 @@ async function patchedNavigationResponse(request){
 self.addEventListener('fetch',e=>{
   const u=new URL(e.request.url);
   if(u.pathname.startsWith('/.netlify/functions/')||u.hostname==='api.scryfall.com') return;
-
   if(['/tracker-ui.js','/intelligence-ui.js','/deals-refresh-fix.js'].includes(u.pathname)){
-    e.respondWith((async()=>{
-      try{return await fetch(e.request,{cache:'no-store'});}catch{return (await caches.match(e.request))||Response.error();}
-    })());
+    e.respondWith((async()=>{try{return await fetch(e.request,{cache:'no-store'});}catch{return (await caches.match(e.request))||Response.error();}})());
     return;
   }
-
   if(e.request.mode==='navigate'){
-    e.respondWith((async()=>{
-      try{
-        const fresh=await patchedNavigationResponse(e.request);
-        const cache=await caches.open(CACHE);
-        cache.put('index.html',fresh.clone());
-        return fresh;
-      }catch{return (await caches.match('index.html'))||Response.error();}
-    })());
+    e.respondWith((async()=>{try{const fresh=await patchedNavigationResponse(e.request),cache=await caches.open(CACHE);cache.put('index.html',fresh.clone());return fresh;}catch{return (await caches.match('index.html'))||Response.error();}})());
     return;
   }
-
-  e.respondWith((async()=>{
-    const cached=await caches.match(e.request); if(cached) return cached;
-    const fresh=await fetch(e.request); const cache=await caches.open(CACHE); cache.put(e.request,fresh.clone()); return fresh;
-  })());
+  e.respondWith((async()=>{const cached=await caches.match(e.request);if(cached)return cached;const fresh=await fetch(e.request),cache=await caches.open(CACHE);cache.put(e.request,fresh.clone());return fresh;})());
 });
