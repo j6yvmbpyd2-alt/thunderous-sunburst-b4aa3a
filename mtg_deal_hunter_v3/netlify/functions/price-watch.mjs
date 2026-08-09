@@ -18,7 +18,7 @@ export default async () => {
   for (const watch of watches) {
     try {
       const url = `https://api.scryfall.com/cards/${encodeURIComponent(watch.set.toLowerCase())}/${encodeURIComponent(watch.collectorNumber)}`;
-      const r = await fetch(url, { headers: { "user-agent": "MTGDealHunter/3.3", "accept": "application/json" } });
+      const r = await fetch(url, { headers: { "user-agent": "MTGDealHunter/3.4", "accept": "application/json" } });
       if (!r.ok) throw new Error(`Scryfall ${r.status}`);
       const card = await r.json();
       const ref = await referencePriceForCard(card, watch.finish);
@@ -44,9 +44,10 @@ export default async () => {
     await sleep(110);
   }
 
+  const sources=[...new Set(results.map(x=>x.price_source).filter(Boolean))];
   const payload = {
     ok: true,
-    source: results.some(x=>x.price_source==="TCGplayer Market") ? "TCGplayer Market" : "Scryfall USD fallback",
+    source: sources.length===1?sources[0]:(sources.length?sources.join(" + "):"No price source"),
     configured: watches.length,
     hits: results.filter(x => x.hit).length,
     updated_at: new Date().toISOString(),
