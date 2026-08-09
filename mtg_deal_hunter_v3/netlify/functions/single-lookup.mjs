@@ -20,7 +20,8 @@ export default async (req) => {
     const category=(url.searchParams.get("category")||"any").toLowerCase();
     if(!name) return json({ok:false,error:"Missing card name"},400);
 
-    const terms=[`!\"${name.replaceAll('"','')}\"`];
+    const safeName=name.replaceAll('"','');
+    const terms=[`name:\"${safeName}\"`];
     if(category==="borderless") terms.push("is:borderless");
     if(category==="secret-lair") terms.push("set:sld");
     if(category==="borderless-secret-lair") terms.push("set:sld","is:borderless");
