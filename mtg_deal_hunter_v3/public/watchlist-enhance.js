@@ -1,9 +1,23 @@
 (()=>{
-  const KEY='mtgWatchV2',money=n=>Number(n||0).toLocaleString(undefined,{style:'currency',currency:'USD'}),load=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'[]')}catch{return[]}},save=v=>localStorage.setItem(KEY,JSON.stringify(v)),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const cardCache=new Map(),decisionCache=new Map();
-  async function exact(id){if(cardCache.has(id))return cardCache.get(id);try{const r=await fetch(`https://api.scryfall.com/cards/${encodeURIComponent(id)}`,{cache:'no-store'});if(!r.ok)return null;const c=await r.json();cardCache.set(id,c);return c}catch{return null}}
+  const KEY='mtgWatchV2',HISTORY='mtgHistoryV2',money=n=>Number(n||0).toLocaleString(undefined,{style:'currency',currency:'USD'}),load=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'[]')}catch{return[]}},save=v=>localStorage.setItem(KEY,JSON.stringify(v)),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const cardCache=new Map(),decisionCache=new Map();let refreshing=false;
+  async function exact(id,force=false){if(!force&&cardCache.has(id))return cardCache.get(id);try{const r=await fetch(`https://api.scryfall.com/cards/${encodeURIComponent(id)}?_=${Date.now()}`,{cache:'no-store'});if(!r.ok)return null;const c=await r.json();cardCache.set(id,c);return c}catch{return null}}
   async function decision(id,finish){const k=id+'|'+finish;if(decisionCache.has(k))return decisionCache.get(k);try{const r=await fetch(`/.netlify/functions/card-intelligence-safe?id=${encodeURIComponent(id)}&finish=${encodeURIComponent(finish||'any')}&_=${Date.now()}`,{cache:'no-store'}),d=await r.json();const v=r.ok&&d.ok?d:null;decisionCache.set(k,v);return v}catch{return null}}
   function pick(c,f){const p=c?.prices||{};if(f==='foil')return Number(p.usd_foil)||null;if(f==='etched')return Number(p.usd_etched)||null;return Number(p.usd)||Number(p.usd_foil)||Number(p.usd_etched)||null}
+  function record(id,p){if(!(p>0))return;try{const h=JSON.parse(localStorage.getItem(HISTORY)||'[]');h.push({id,p:+p,t:Date.now()});localStorage.setItem(HISTORY,JSON.stringify(h.slice(-1000)))}catch{}}
+  async function refreshAllEnhanced(){
+    if(refreshing)return;refreshing=true;const btn=document.getElementById('refreshAll'),rows=load();
+    if(btn){btn.disabled=true;btn.textContent='Refreshing…'}
+    try{
+      const updated=[...rows];cardCache.clear();decisionCache.clear();
+      for(let i=0;i<rows.length;i++){
+        if(btn)btn.textContent=`Refreshing ${i+1}/${rows.length}`;
+        const c=await exact(rows[i].id,true);if(c){const p=pick(c,rows[i].finish);updated[i]={...rows[i],last:p||rows[i].last,checked:Date.now()};record(rows[i].id,p)}
+        if(i<rows.length-1)await new Promise(r=>setTimeout(r,90));
+      }
+      save(updated);await render();
+    }finally{refreshing=false;if(btn){btn.disabled=false;btn.textContent='Refresh all'}}
+  }
   async function render(){
     const box=document.getElementById('watchlistBox');if(!box)return;const rows=load();
     if(!rows.length){box.innerHTML='<div class="tiny good">Enhanced Watchlist v2 loaded</div><div class="empty">No watched cards yet.</div>';return}
@@ -14,8 +28,9 @@
     box.querySelectorAll('.watch-remove').forEach(b=>b.onclick=()=>{const a=load();a.splice(Number(b.dataset.index),1);save(a);decisionCache.clear();render()});
     rows.forEach(async(x,i)=>{const host=document.getElementById('watchIntel'+i);if(!host)return;const d=await decision(x.id,x.finish||'any');if(!d){host.textContent='Purchase Decision unavailable for this printing.';host.className='bad';return}const intel=d.intelligence,cl=intel.decision==='BUY'?'good':intel.decision==='PASS'?'bad':'watch';host.className=cl;host.innerHTML=`<b>${esc(intel.decision)}</b> • ${Number(intel.buy_confidence||0)}% confidence • Data Quality ${esc(intel.data_quality_grade||intel.evidence_grade||'—')}<br><span class="tiny">Max buy ${intel.max_buy?money(intel.max_buy):'—'} • Reprint risk ${esc(intel.reprint_risk||'UNKNOWN')} • ${esc(intel.entry_trigger||'')}</span>`});
   }
-  function takeControl(){window.renderWatch=render;window.renderEnhancedWatchlist=render;}
-  const obs=new MutationObserver(()=>{const p=document.getElementById('watchlist');if(p?.classList.contains('active'))setTimeout(render,0)});
-  function init(){const p=document.getElementById('watchlist');if(!p)return;takeControl();obs.observe(p,{attributes:true,attributeFilter:['class']});document.querySelector('[data-tab="watchlist"]')?.addEventListener('click',()=>setTimeout(render,10));setTimeout(()=>{takeControl();render()},50);setTimeout(takeControl,500)}
+  function bindRefresh(){const b=document.getElementById('refreshAll');if(!b)return;b.onclick=refreshAllEnhanced;}
+  function takeControl(){window.renderWatch=render;window.renderEnhancedWatchlist=render;window.refreshAll=refreshAllEnhanced;bindRefresh()}
+  const obs=new MutationObserver(()=>{const p=document.getElementById('watchlist');if(p?.classList.contains('active')){takeControl();setTimeout(render,0)}});
+  function init(){const p=document.getElementById('watchlist');if(!p)return;takeControl();obs.observe(p,{attributes:true,attributeFilter:['class']});document.querySelector('[data-tab="watchlist"]')?.addEventListener('click',()=>{takeControl();setTimeout(render,10)});setTimeout(()=>{takeControl();render()},50);setTimeout(takeControl,500)}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
