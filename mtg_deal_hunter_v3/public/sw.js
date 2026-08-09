@@ -1,5 +1,5 @@
-const CACHE='mtg-deal-hunter-v3-6-preview';
-const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js','tracker-ui.js'];
+const CACHE='mtg-deal-hunter-v3-7-preview';
+const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js'];
 
 self.addEventListener('install',e=>{
   self.skipWaiting();
@@ -18,11 +18,7 @@ self.addEventListener('push',event=>{
   let data={title:'MTG Deal Hunter',body:'A watched card changed.',url:'/?tab=tracker',tag:'mtg-alert'};
   try{data={...data,...event.data.json()}}catch{}
   event.waitUntil(self.registration.showNotification(data.title||'MTG Deal Hunter',{
-    body:data.body||'',
-    icon:'/icon.svg',
-    badge:'/icon.svg',
-    tag:data.tag||'mtg-alert',
-    data:{url:data.url||'/?tab=tracker'}
+    body:data.body||'',icon:'/icon.svg',badge:'/icon.svg',tag:data.tag||'mtg-alert',data:{url:data.url||'/?tab=tracker'}
   }));
 });
 
@@ -31,23 +27,14 @@ self.addEventListener('notificationclick',event=>{
   const target=new URL(event.notification.data?.url||'/?tab=tracker',self.location.origin).href;
   event.waitUntil((async()=>{
     const clientsList=await clients.matchAll({type:'window',includeUncontrolled:true});
-    for(const client of clientsList){
-      if('navigate'in client) await client.navigate(target);
-      return client.focus();
-    }
+    for(const client of clientsList){if('navigate'in client) await client.navigate(target);return client.focus();}
     return clients.openWindow(target);
   })());
 });
 
 function repairDynamicLinks(html){
-  html=html.replaceAll(
-    `onclick=\"window.open(\${JSON.stringify(x.url)},'_blank')\"`,
-    `data-url=\"\${encodeURIComponent(x.url)}\" onclick=\"location.href=decodeURIComponent(this.dataset.url)\"`
-  );
-  html=html.replaceAll(
-    `onclick=\"window.open(\${JSON.stringify(w.scryfall_uri)},'_blank')\"`,
-    `data-url=\"\${encodeURIComponent(w.scryfall_uri)}\" onclick=\"location.href=decodeURIComponent(this.dataset.url)\"`
-  );
+  html=html.replaceAll(`onclick=\"window.open(\${JSON.stringify(x.url)},'_blank')\"`,`data-url=\"\${encodeURIComponent(x.url)}\" onclick=\"location.href=decodeURIComponent(this.dataset.url)\"`);
+  html=html.replaceAll(`onclick=\"window.open(\${JSON.stringify(w.scryfall_uri)},'_blank')\"`,`data-url=\"\${encodeURIComponent(w.scryfall_uri)}\" onclick=\"location.href=decodeURIComponent(this.dataset.url)\"`);
   return html;
 }
 
@@ -57,7 +44,7 @@ async function patchedNavigationResponse(request){
   if(!type.includes('text/html')) return fresh;
   let html=repairDynamicLinks(await fresh.text());
   if(!html.includes('link-fix.js')) html=html.replace('</body>','<script src="/link-fix.js"></script></body>');
-  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js"></script></body>');
+  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js?v=7"></script></body>');
   const headers=new Headers(fresh.headers);
   headers.set('content-type','text/html; charset=utf-8');
   headers.set('cache-control','no-store');
@@ -67,6 +54,14 @@ async function patchedNavigationResponse(request){
 self.addEventListener('fetch',e=>{
   const u=new URL(e.request.url);
   if(u.pathname.startsWith('/.netlify/functions/')||u.hostname==='api.scryfall.com') return;
+
+  if(u.pathname.endsWith('/tracker-ui.js')||u.pathname==='/tracker-ui.js'){
+    e.respondWith((async()=>{
+      try{return await fetch(e.request,{cache:'no-store'});}catch{return (await caches.match(e.request))||Response.error();}
+    })());
+    return;
+  }
+
   if(e.request.mode==='navigate'){
     e.respondWith((async()=>{
       try{
@@ -78,6 +73,7 @@ self.addEventListener('fetch',e=>{
     })());
     return;
   }
+
   e.respondWith((async()=>{
     const cached=await caches.match(e.request); if(cached) return cached;
     const fresh=await fetch(e.request); const cache=await caches.open(CACHE); cache.put(e.request,fresh.clone()); return fresh;
