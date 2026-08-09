@@ -1,4 +1,4 @@
-const CACHE='mtg-deal-hunter-v3-10-preview';
+const CACHE='mtg-deal-hunter-v3-11-preview';
 const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js'];
 
 self.addEventListener('install',e=>{
@@ -44,9 +44,9 @@ async function patchedNavigationResponse(request){
   if(!type.includes('text/html')) return fresh;
   let html=repairDynamicLinks(await fresh.text());
   if(!html.includes('link-fix.js')) html=html.replace('</body>','<script src="/link-fix.js"></script></body>');
-  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js?v=10"></script></body>');
-  if(!html.includes('intelligence-ui.js')) html=html.replace('</body>','<script src="/intelligence-ui.js?v=3"></script></body>');
-  if(!html.includes('deals-refresh-fix.js')) html=html.replace('</body>','<script src="/deals-refresh-fix.js?v=2"></script></body>');
+  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js?v=11"></script></body>');
+  if(!html.includes('intelligence-ui.js')) html=html.replace('</body>','<script src="/intelligence-ui.js?v=4"></script></body>');
+  if(!html.includes('deals-refresh-fix.js')) html=html.replace('</body>','<script src="/deals-refresh-fix.js?v=3"></script></body>');
   const headers=new Headers(fresh.headers);
   headers.set('content-type','text/html; charset=utf-8');
   headers.set('cache-control','no-store');
