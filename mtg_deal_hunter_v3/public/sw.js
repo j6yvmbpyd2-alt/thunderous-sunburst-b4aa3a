@@ -1,4 +1,4 @@
-const CACHE='mtg-deal-hunter-v3-13-regime';
+const CACHE='mtg-deal-hunter-v3-14-collection';
 const ASSETS=['./','index.html','manifest.webmanifest','icon.svg','link-fix.js'];
 
 self.addEventListener('install',e=>{
@@ -44,9 +44,10 @@ async function patchedNavigationResponse(request){
   if(!type.includes('text/html')) return fresh;
   let html=repairDynamicLinks(await fresh.text());
   if(!html.includes('link-fix.js')) html=html.replace('</body>','<script src="/link-fix.js"></script></body>');
-  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js?v=13"></script></body>');
-  if(!html.includes('intelligence-ui.js')) html=html.replace('</body>','<script src="/intelligence-ui.js?v=6"></script></body>');
-  if(!html.includes('deals-refresh-fix.js')) html=html.replace('</body>','<script src="/deals-refresh-fix.js?v=5"></script></body>');
+  if(!html.includes('tracker-ui.js')) html=html.replace('</body>','<script src="/tracker-ui.js?v=14"></script></body>');
+  if(!html.includes('intelligence-ui.js')) html=html.replace('</body>','<script src="/intelligence-ui.js?v=7"></script></body>');
+  if(!html.includes('deals-refresh-fix.js')) html=html.replace('</body>','<script src="/deals-refresh-fix.js?v=6"></script></body>');
+  if(!html.includes('collection-ui.js')) html=html.replace('</body>','<script src="/collection-ui.js?v=1"></script></body>');
   const headers=new Headers(fresh.headers);
   headers.set('content-type','text/html; charset=utf-8');
   headers.set('cache-control','no-store');
@@ -56,7 +57,7 @@ async function patchedNavigationResponse(request){
 self.addEventListener('fetch',e=>{
   const u=new URL(e.request.url);
   if(u.pathname.startsWith('/.netlify/functions/')||u.hostname==='api.scryfall.com') return;
-  if(['/tracker-ui.js','/intelligence-ui.js','/deals-refresh-fix.js'].includes(u.pathname)){
+  if(['/tracker-ui.js','/intelligence-ui.js','/deals-refresh-fix.js','/collection-ui.js'].includes(u.pathname)){
     e.respondWith((async()=>{try{return await fetch(e.request,{cache:'no-store'});}catch{return (await caches.match(e.request))||Response.error();}})());
     return;
   }
