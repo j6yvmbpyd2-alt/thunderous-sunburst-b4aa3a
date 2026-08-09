@@ -17,6 +17,8 @@ Upload/deploy the **contents of this folder as a Netlify project**, not just the
 
 If your current site was created by drag-and-drop, the most reliable way to enable Functions is to connect this folder through a Git repository or use Netlify CLI (`netlify deploy --prod`). A static-only upload of `public/` will run the PWA but will not install the backend Functions.
 
+The repository is now public so Netlify's free-plan private-repository contributor restriction no longer blocks automated Git commits from deploying.
+
 ## Environment variables
 
 In Netlify: Project configuration → Environment variables.
