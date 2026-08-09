@@ -1,4 +1,4 @@
-const CACHE='mtg-deal-hunter-v3-1';
+const CACHE='mtg-deal-hunter-v3-2';
 const ASSETS=['./','index.html','manifest.webmanifest','icon.svg'];
 
 self.addEventListener('install',e=>{
