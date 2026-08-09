@@ -1,0 +1,41 @@
+name: MTGJSON History Cache
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  build-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install streaming JSON parser
+        run: python -m pip install --disable-pip-version-check ijson
+
+      - name: Build compact 90-day MTGJSON cache
+        working-directory: mtg_deal_hunter_v3
+        run: python scripts/build_mtgjson_history.py
+
+      - name: Commit cache if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mtg_deal_hunter_v3/public/data/mtgjson-history.json
+          if git diff --cached --quiet; then
+            echo "No history changes"
+            exit 0
+          fi
+          git commit -m "Update MTGJSON 90-day price history cache"
+          git push
