@@ -10,3 +10,6 @@
 
 [functions."price-watch"]
   schedule = "@hourly"
+
+[functions."top20-run"]
+  schedule = "@hourly"
