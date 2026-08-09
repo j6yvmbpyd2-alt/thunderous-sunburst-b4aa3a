@@ -7,6 +7,8 @@ export const clean = v => typeof v === "string" ? v.trim() : v;
 
 let tcgToken=null;
 let tcgTokenExpires=0;
+let mtgjsonTodayPromise=null;
+const mtgjsonSetCache=new Map();
 
 async function getTcgToken(){
   const publicKey=process.env.TCGPLAYER_PUBLIC_KEY;
@@ -14,11 +16,7 @@ async function getTcgToken(){
   if(!publicKey||!privateKey) return null;
   if(tcgToken&&Date.now()<tcgTokenExpires-60000) return tcgToken;
   const body=new URLSearchParams({grant_type:"client_credentials",client_id:publicKey,client_secret:privateKey});
-  const r=await fetch("https://api.tcgplayer.com/token",{
-    method:"POST",
-    headers:{"content-type":"application/x-www-form-urlencoded","accept":"application/json"},
-    body
-  });
+  const r=await fetch("https://api.tcgplayer.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded","accept":"application/json"},body});
   if(!r.ok) return null;
   const data=await r.json();
   if(!data.access_token) return null;
@@ -33,9 +31,7 @@ export async function tcgMarketPrice(card, finish="nonfoil"){
   const f=String(finish||"nonfoil").toLowerCase();
   const productId=f==="etched"?(card.tcgplayer_etched_id||card.tcgplayer_id):card.tcgplayer_id;
   if(!productId) return null;
-  const r=await fetch(`https://api.tcgplayer.com/pricing/product/${encodeURIComponent(productId)}`,{
-    headers:{"authorization":`bearer ${token}`,"accept":"application/json"}
-  });
+  const r=await fetch(`https://api.tcgplayer.com/pricing/product/${encodeURIComponent(productId)}`,{headers:{"authorization":`bearer ${token}`,"accept":"application/json"}});
   if(!r.ok) return null;
   const data=await r.json();
   const rows=Array.isArray(data.results)?data.results:[];
@@ -54,10 +50,63 @@ function scryfallUsd(card, finish="nonfoil"){
   return p.usd?Number(p.usd):null;
 }
 
+async function mtgjsonUuid(card){
+  const set=String(card.set||"").toUpperCase();
+  if(!set) return null;
+  let data=mtgjsonSetCache.get(set);
+  if(!data){
+    const r=await fetch(`https://mtgjson.com/api/v5/${encodeURIComponent(set)}.json`,{headers:{"accept":"application/json"},signal:AbortSignal.timeout(3500)});
+    if(!r.ok) return null;
+    data=await r.json();
+    mtgjsonSetCache.set(set,data);
+  }
+  const cards=data?.data?.cards||[];
+  const found=cards.find(x=>x?.identifiers?.scryfallId===card.id)||cards.find(x=>String(x.number)===String(card.collector_number)&&String(x.name)===String(card.name));
+  return found?.uuid||null;
+}
+
+async function mtgjsonPricesToday(){
+  if(!mtgjsonTodayPromise){
+    mtgjsonTodayPromise=(async()=>{
+      const r=await fetch("https://mtgjson.com/api/v5/AllPricesToday.json",{headers:{"accept":"application/json"},signal:AbortSignal.timeout(6000)});
+      if(!r.ok) return null;
+      return r.json();
+    })().catch(()=>null);
+  }
+  return mtgjsonTodayPromise;
+}
+
+export async function mtgjsonTcgRetailPrice(card, finish="nonfoil"){
+  try{
+    const uuid=await mtgjsonUuid(card);
+    if(!uuid) return null;
+    const cachedKey=`mtgjson-tcg:${uuid}:${String(finish).toLowerCase()}`;
+    try{
+      const cached=await store().get(cachedKey,{type:"json",consistency:"strong"});
+      if(cached?.date===new Date().toISOString().slice(0,10)&&Number(cached.price)>0) return Number(cached.price);
+    }catch{}
+    const all=await mtgjsonPricesToday();
+    const retail=all?.data?.[uuid]?.paper?.tcgplayer?.retail;
+    if(!retail) return null;
+    const f=String(finish||"nonfoil").toLowerCase();
+    const points=f==="foil"?retail.foil:f==="etched"?retail.etched:retail.normal;
+    if(!points||typeof points!=="object") return null;
+    const dates=Object.keys(points).sort();
+    const p=Number(points[dates[dates.length-1]]);
+    if(!(p>0)) return null;
+    try{await store().setJSON(cachedKey,{date:new Date().toISOString().slice(0,10),price:p});}catch{}
+    return p;
+  }catch{return null;}
+}
+
 export async function referencePriceForCard(card, finish="nonfoil"){
   try{
     const tcg=await tcgMarketPrice(card,finish);
     if(tcg>0) return {price:tcg,source:"TCGplayer Market"};
+  }catch{}
+  try{
+    const proxy=await mtgjsonTcgRetailPrice(card,finish);
+    if(proxy>0) return {price:proxy,source:"MTGJSON TCGplayer retail proxy"};
   }catch{}
   const fallback=scryfallUsd(card,finish);
   return {price:fallback,source:"Scryfall USD fallback"};
@@ -70,7 +119,7 @@ export async function exactScryfallPrice(item){
   if(item.set && item.collector_number) url=`https://api.scryfall.com/cards/${encodeURIComponent(String(item.set).toLowerCase())}/${encodeURIComponent(item.collector_number)}`;
   else if(item.card_name) url=`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(item.card_name)}`;
   else return null;
-  const r=await fetch(url,{headers:{"user-agent":"MTGDealHunter/3.3","accept":"application/json"}});
+  const r=await fetch(url,{headers:{"user-agent":"MTGDealHunter/3.4","accept":"application/json"}});
   if(!r.ok) return null;
   const c=await r.json();
   const ref=await referencePriceForCard(c,item.finish||"nonfoil");
@@ -84,10 +133,5 @@ export async function normalizeDeal(raw, threshold=25){
   if(!(market>0)) return null;
   const discount=(1-price/market)*100;
   if(discount < threshold) return null;
-  return {
-    type: clean(raw.type||"single"), name: clean(raw.name||raw.card_name||raw.product_name||"Unnamed deal"),
-    store: clean(raw.store||"Unknown store"), url: clean(raw.url||""), price, market_price:market,
-    discount_pct:discount, detail: clean(raw.detail||[raw.set,raw.collector_number,raw.finish,raw.condition].filter(Boolean).join(" • ")),
-    found_at:new Date().toISOString()
-  };
+  return {type:clean(raw.type||"single"),name:clean(raw.name||raw.card_name||raw.product_name||"Unnamed deal"),store:clean(raw.store||"Unknown store"),url:clean(raw.url||""),price,market_price:market,discount_pct:discount,detail:clean(raw.detail||[raw.set,raw.collector_number,raw.finish,raw.condition].filter(Boolean).join(" • ")),found_at:new Date().toISOString()};
 }
