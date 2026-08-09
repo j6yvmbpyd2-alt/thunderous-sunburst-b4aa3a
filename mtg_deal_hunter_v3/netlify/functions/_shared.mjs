@@ -10,128 +10,14 @@ let tcgTokenExpires=0;
 let mtgjsonTodayPromise=null;
 const mtgjsonSetCache=new Map();
 
-async function getTcgToken(){
-  const publicKey=process.env.TCGPLAYER_PUBLIC_KEY;
-  const privateKey=process.env.TCGPLAYER_PRIVATE_KEY;
-  if(!publicKey||!privateKey) return null;
-  if(tcgToken&&Date.now()<tcgTokenExpires-60000) return tcgToken;
-  const body=new URLSearchParams({grant_type:"client_credentials",client_id:publicKey,client_secret:privateKey});
-  const r=await fetch("https://api.tcgplayer.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded","accept":"application/json"},body});
-  if(!r.ok) return null;
-  const data=await r.json();
-  if(!data.access_token) return null;
-  tcgToken=data.access_token;
-  tcgTokenExpires=Date.now()+(Number(data.expires_in||3600)*1000);
-  return tcgToken;
-}
-
-export async function tcgMarketPrice(card, finish="nonfoil"){
-  const token=await getTcgToken();
-  if(!token) return null;
-  const f=String(finish||"nonfoil").toLowerCase();
-  const productId=f==="etched"?(card.tcgplayer_etched_id||card.tcgplayer_id):card.tcgplayer_id;
-  if(!productId) return null;
-  const r=await fetch(`https://api.tcgplayer.com/pricing/product/${encodeURIComponent(productId)}`,{headers:{"authorization":`bearer ${token}`,"accept":"application/json"}});
-  if(!r.ok) return null;
-  const data=await r.json();
-  const rows=Array.isArray(data.results)?data.results:[];
-  let row=null;
-  if(f==="foil") row=rows.find(x=>/foil/i.test(String(x.subTypeName||""))&&!/reverse/i.test(String(x.subTypeName||"")));
-  else if(f==="nonfoil") row=rows.find(x=>/^normal$/i.test(String(x.subTypeName||"")))||rows.find(x=>!/foil/i.test(String(x.subTypeName||"")));
-  else row=rows.find(x=>Number(x.marketPrice)>0);
-  const p=Number(row?.marketPrice);
-  return p>0?p:null;
-}
-
-function scryfallUsd(card, finish="nonfoil"){
-  const p=card.prices||{},f=String(finish||"nonfoil").toLowerCase();
-  if(f==="foil") return p.usd_foil?Number(p.usd_foil):null;
-  if(f==="etched") return p.usd_etched?Number(p.usd_etched):null;
-  return p.usd?Number(p.usd):null;
-}
-
-async function mtgjsonUuid(card){
-  const set=String(card.set||"").toUpperCase();
-  if(!set) return null;
-  let data=mtgjsonSetCache.get(set);
-  if(!data){
-    const r=await fetch(`https://mtgjson.com/api/v5/${encodeURIComponent(set)}.json`,{headers:{"accept":"application/json"},signal:AbortSignal.timeout(3500)});
-    if(!r.ok) return null;
-    data=await r.json();
-    mtgjsonSetCache.set(set,data);
-  }
-  const cards=data?.data?.cards||[];
-  const found=cards.find(x=>x?.identifiers?.scryfallId===card.id)||cards.find(x=>String(x.number)===String(card.collector_number)&&String(x.name)===String(card.name));
-  return found?.uuid||null;
-}
-
-async function mtgjsonPricesToday(){
-  if(!mtgjsonTodayPromise){
-    mtgjsonTodayPromise=(async()=>{
-      const r=await fetch("https://mtgjson.com/api/v5/AllPricesToday.json",{headers:{"accept":"application/json"},signal:AbortSignal.timeout(6000)});
-      if(!r.ok) return null;
-      return r.json();
-    })().catch(()=>null);
-  }
-  return mtgjsonTodayPromise;
-}
-
-export async function mtgjsonTcgRetailPrice(card, finish="nonfoil"){
-  try{
-    const uuid=await mtgjsonUuid(card);
-    if(!uuid) return null;
-    const cachedKey=`mtgjson-tcg:${uuid}:${String(finish).toLowerCase()}`;
-    try{
-      const cached=await store().get(cachedKey,{type:"json",consistency:"strong"});
-      if(cached?.date===new Date().toISOString().slice(0,10)&&Number(cached.price)>0) return Number(cached.price);
-    }catch{}
-    const all=await mtgjsonPricesToday();
-    const retail=all?.data?.[uuid]?.paper?.tcgplayer?.retail;
-    if(!retail) return null;
-    const f=String(finish||"nonfoil").toLowerCase();
-    const points=f==="foil"?retail.foil:f==="etched"?retail.etched:retail.normal;
-    if(!points||typeof points!=="object") return null;
-    const dates=Object.keys(points).sort();
-    const p=Number(points[dates[dates.length-1]]);
-    if(!(p>0)) return null;
-    try{await store().setJSON(cachedKey,{date:new Date().toISOString().slice(0,10),price:p});}catch{}
-    return p;
-  }catch{return null;}
-}
-
-export async function referencePriceForCard(card, finish="nonfoil"){
-  try{
-    const tcg=await tcgMarketPrice(card,finish);
-    if(tcg>0) return {price:tcg,source:"TCGplayer Market"};
-  }catch{}
-  try{
-    const proxy=await mtgjsonTcgRetailPrice(card,finish);
-    if(proxy>0) return {price:proxy,source:"MTGJSON TCGplayer retail proxy"};
-  }catch{}
-  const fallback=scryfallUsd(card,finish);
-  return {price:fallback,source:"Scryfall USD fallback"};
-}
-
-export async function exactScryfallPrice(item){
-  if(item.market_price) return Number(item.market_price);
-  if(item.type !== "single") return null;
-  let url;
-  if(item.set && item.collector_number) url=`https://api.scryfall.com/cards/${encodeURIComponent(String(item.set).toLowerCase())}/${encodeURIComponent(item.collector_number)}`;
-  else if(item.card_name) url=`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(item.card_name)}`;
-  else return null;
-  const r=await fetch(url,{headers:{"user-agent":"MTGDealHunter/3.4","accept":"application/json"}});
-  if(!r.ok) return null;
-  const c=await r.json();
-  const ref=await referencePriceForCard(c,item.finish||"nonfoil");
-  return ref.price;
-}
-
-export async function normalizeDeal(raw, threshold=25){
-  const price=Number(raw.price);
-  if(!(price>=0)) return null;
-  const market=await exactScryfallPrice(raw);
-  if(!(market>0)) return null;
-  const discount=(1-price/market)*100;
-  if(discount < threshold) return null;
-  return {type:clean(raw.type||"single"),name:clean(raw.name||raw.card_name||raw.product_name||"Unnamed deal"),store:clean(raw.store||"Unknown store"),url:clean(raw.url||""),price,market_price:market,discount_pct:discount,detail:clean(raw.detail||[raw.set,raw.collector_number,raw.finish,raw.condition].filter(Boolean).join(" • ")),found_at:new Date().toISOString()};
-}
+async function getTcgToken(){const publicKey=process.env.TCGPLAYER_PUBLIC_KEY,privateKey=process.env.TCGPLAYER_PRIVATE_KEY;if(!publicKey||!privateKey)return null;if(tcgToken&&Date.now()<tcgTokenExpires-60000)return tcgToken;const body=new URLSearchParams({grant_type:"client_credentials",client_id:publicKey,client_secret:privateKey}),r=await fetch("https://api.tcgplayer.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded","accept":"application/json"},body});if(!r.ok)return null;const data=await r.json();if(!data.access_token)return null;tcgToken=data.access_token;tcgTokenExpires=Date.now()+(Number(data.expires_in||3600)*1000);return tcgToken}
+export async function tcgMarketPrice(card,finish="nonfoil"){const token=await getTcgToken();if(!token)return null;const f=String(finish||"nonfoil").toLowerCase(),productId=f==="etched"?(card.tcgplayer_etched_id||card.tcgplayer_id):card.tcgplayer_id;if(!productId)return null;const r=await fetch(`https://api.tcgplayer.com/pricing/product/${encodeURIComponent(productId)}`,{headers:{"authorization":`bearer ${token}`,"accept":"application/json"}});if(!r.ok)return null;const data=await r.json(),rows=Array.isArray(data.results)?data.results:[];let row=null;if(f==="foil")row=rows.find(x=>/foil/i.test(String(x.subTypeName||""))&&!/reverse/i.test(String(x.subTypeName||"")));else if(f==="nonfoil")row=rows.find(x=>/^normal$/i.test(String(x.subTypeName||"")))||rows.find(x=>!/foil/i.test(String(x.subTypeName||"")));else row=rows.find(x=>Number(x.marketPrice)>0);const p=Number(row?.marketPrice);return p>0?p:null}
+function scryfallUsd(card,finish="nonfoil"){const p=card.prices||{},f=String(finish||"nonfoil").toLowerCase();if(f==="foil")return p.usd_foil?Number(p.usd_foil):null;if(f==="etched")return p.usd_etched?Number(p.usd_etched):null;return p.usd?Number(p.usd):null}
+async function mtgjsonUuid(card){const set=String(card.set||"").toUpperCase();if(!set)return null;let data=mtgjsonSetCache.get(set);if(!data){const r=await fetch(`https://mtgjson.com/api/v5/${encodeURIComponent(set)}.json`,{headers:{"accept":"application/json"},signal:AbortSignal.timeout(3500)});if(!r.ok)return null;data=await r.json();mtgjsonSetCache.set(set,data)}const cards=data?.data?.cards||[],found=cards.find(x=>x?.identifiers?.scryfallId===card.id)||cards.find(x=>String(x.number)===String(card.collector_number)&&String(x.name)===String(card.name));return found?.uuid||null}
+async function mtgjsonPricesToday(){if(!mtgjsonTodayPromise){mtgjsonTodayPromise=(async()=>{const r=await fetch("https://mtgjson.com/api/v5/AllPricesToday.json",{headers:{"accept":"application/json"},signal:AbortSignal.timeout(6000)});if(!r.ok)return null;return r.json()})().catch(()=>null)}return mtgjsonTodayPromise}
+export async function mtgjsonTcgRetailPrice(card,finish="nonfoil"){try{const uuid=await mtgjsonUuid(card);if(!uuid)return null;const cachedKey=`mtgjson-tcg:${uuid}:${String(finish).toLowerCase()}`;try{const cached=await store().get(cachedKey,{type:"json",consistency:"strong"});if(cached?.date===new Date().toISOString().slice(0,10)&&Number(cached.price)>0)return Number(cached.price)}catch{}const all=await mtgjsonPricesToday(),retail=all?.data?.[uuid]?.paper?.tcgplayer?.retail;if(!retail)return null;const f=String(finish||"nonfoil").toLowerCase(),points=f==="foil"?retail.foil:f==="etched"?retail.etched:retail.normal;if(!points||typeof points!=="object")return null;const dates=Object.keys(points).sort(),p=Number(points[dates[dates.length-1]]);if(!(p>0))return null;try{await store().setJSON(cachedKey,{date:new Date().toISOString().slice(0,10),price:p})}catch{}return p}catch{return null}}
+export async function referencePriceForCard(card,finish="nonfoil"){try{const tcg=await tcgMarketPrice(card,finish);if(tcg>0)return{price:tcg,source:"TCGplayer Market"}}catch{}try{const proxy=await mtgjsonTcgRetailPrice(card,finish);if(proxy>0)return{price:proxy,source:"MTGJSON TCGplayer retail proxy"}}catch{}const fallback=scryfallUsd(card,finish);return{price:fallback,source:"Scryfall USD fallback"}}
+export async function exactScryfallReference(item){if(item.market_price)return{price:Number(item.market_price),source:item.market_source||"submitted market price"};if(item.type!=="single")return{price:null,source:null};let url;if(item.set&&item.collector_number)url=`https://api.scryfall.com/cards/${encodeURIComponent(String(item.set).toLowerCase())}/${encodeURIComponent(item.collector_number)}`;else if(item.card_name)url=`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(item.card_name)}`;else return{price:null,source:null};const r=await fetch(url,{headers:{"user-agent":"MTGDealHunter/5.7","accept":"application/json"}});if(!r.ok)return{price:null,source:null};const c=await r.json();return referencePriceForCard(c,item.finish||"nonfoil")}
+export async function exactScryfallPrice(item){return (await exactScryfallReference(item)).price}
+export async function evaluateDeal(raw,threshold=25){const price=Number(raw.price),base={type:clean(raw.type||"single"),name:clean(raw.name||raw.card_name||raw.product_name||"Unnamed deal"),store:clean(raw.store||"Unknown store"),url:clean(raw.url||""),price:Number.isFinite(price)?price:null,detail:clean(raw.detail||[raw.set,raw.collector_number,raw.finish,raw.condition].filter(Boolean).join(" • ")),set:raw.set||null,collector_number:raw.collector_number||null,finish:raw.finish||"nonfoil"};if(!(price>=0))return{...base,qualified:false,rejection_reason:"invalid_listing_price"};let ref;try{ref=await exactScryfallReference(raw)}catch{return{...base,qualified:false,rejection_reason:"reference_lookup_failed"}}const market=Number(ref?.price);if(!(market>0))return{...base,qualified:false,rejection_reason:"reference_price_unavailable",reference_source:ref?.source||null};const discount=(1-price/market)*100,out={...base,market_price:market,reference_source:ref.source||null,discount_pct:discount,threshold};if(discount<threshold)return{...out,qualified:false,rejection_reason:"below_discount_threshold",threshold_gap:threshold-discount};return{...out,qualified:true,rejection_reason:null,found_at:new Date().toISOString()}}
+export async function normalizeDeal(raw,threshold=25){const x=await evaluateDeal(raw,threshold);if(!x.qualified)return null;const {qualified,rejection_reason,threshold_gap,...deal}=x;return deal}
