@@ -6,7 +6,8 @@ This is a deploy-ready version of MTG Deal Hunter with:
 - a **Deals** tab backed by Netlify Functions
 - persistent deal storage using **Netlify Blobs**
 - an **hourly scheduled scanner**
-- exact Scryfall reference-price lookup for singles when a feed provides a set + collector number (or card name)
+- exact-printing reference pricing for singles, preferring **TCGplayer Market** when TCGplayer API credentials are configured
+- a safe Scryfall USD fallback when TCGplayer credentials are unavailable
 - configurable external deal-feed adapters
 - a protected manual ingestion endpoint
 
@@ -25,12 +26,16 @@ Optional:
 - `DEAL_THRESHOLD` — default `25`
 - `DEAL_FEED_URLS` — comma-separated HTTPS JSON feed URLs
 - `DEAL_ADMIN_TOKEN` — a long random secret used by `submit-deal`
+- `TCGPLAYER_PUBLIC_KEY` — existing TCGplayer API developer public key/client ID
+- `TCGPLAYER_PRIVATE_KEY` — existing TCGplayer API developer private key/client secret
+
+When both TCGplayer keys are present, single-card reference prices and the scheduled server price watches prefer TCGplayer `marketPrice`. If the credentials are missing, authentication fails, or an exact TCGplayer product cannot be matched, the backend falls back to the matching Scryfall USD price rather than breaking the scanner.
 
 ### Feed JSON format
 
 Each configured URL can return either an array or `{ "deals": [...] }`.
 
-Example single (market price can be omitted if exact Scryfall fields are supplied):
+Example single (market price can be omitted if exact card fields are supplied):
 
 ```json
 {
@@ -66,7 +71,8 @@ The scanner only stores deals at or above the configured percentage discount.
 ## Functions
 
 - `/.netlify/functions/health` — backend health check
-- `/.netlify/functions/deals` — current qualifying feed
+- `/.netlify/functions/deals` — current qualifying feed plus server price watches
+- `price-watch` — scheduled `@hourly`; prefers TCGplayer Market when configured
 - `scan-deals` — scheduled `@hourly`; also has a **Run now** control in Netlify's Functions UI
 - `/.netlify/functions/submit-deal` — protected POST ingestion endpoint
 
