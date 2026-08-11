@@ -27,7 +27,30 @@ async function searchFallback(item){const name=String(item.card_name||item.name|
 
 export async function prefetchScryfallCards(items,{fallbackLimit=24}={}){const exact=[...new Map(items.filter(x=>x?.type==='single'&&x.set&&x.collector_number).map(x=>[cardKey(x),x])).values()],chunks=[];for(let i=0;i<exact.length;i+=70)chunks.push(exact.slice(i,i+70));let batchRequests=0,batchFound=0;for(const chunk of chunks){const identifiers=chunk.map(x=>({set:String(x.set).toLowerCase(),collector_number:String(x.collector_number)}));try{const r=await scryfallFetch('https://api.scryfall.com/cards/collection',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({identifiers})});batchRequests++;if(!r.ok)continue;const d=await r.json(),cards=Array.isArray(d.data)?d.data:[];for(const c of cards){for(const item of chunk){if(String(c.set).toLowerCase()===String(item.set).toLowerCase()&&normCollector(c.collector_number)===normCollector(item.collector_number)){cardCache.set(cardKey(item),c);prefetchMisses.delete(cardKey(item));batchFound++}}}for(const item of chunk)if(!cardCache.has(cardKey(item)))prefetchMisses.set(cardKey(item),'scryfall_exact_print_not_found')}catch{for(const item of chunk)if(!cardCache.has(cardKey(item)))prefetchMisses.set(cardKey(item),'scryfall_batch_lookup_failed')}}const misses=exact.filter(x=>!cardCache.has(cardKey(x))).slice(0,Math.max(0,fallbackLimit));const recovered=(await mapLimit(misses,4,async item=>{const fb=await searchFallback(item);if(fb.card){cardCache.set(cardKey(item),fb.card);prefetchMisses.delete(cardKey(item));return 1}prefetchMisses.set(cardKey(item),fb.reason||'scryfall_exact_print_not_found');return 0})).reduce((a,b)=>a+Number(b||0),0);return{exact_requested:exact.length,batch_requests:batchRequests,batch_found:batchFound,fallback_attempted:misses.length,fallback_recovered:recovered,remaining_misses:exact.filter(x=>!cardCache.has(cardKey(x))).length}}
 
-async function fetchCard(item){const set=String(item.set||"").toLowerCase(),num=String(item.collector_number||""),name=String(item.card_name||item.name||'');const ck=set&&num?`${set}:${num}`:`name:${name.toLowerCase()}`;if(cardCache.has(ck))return{card:cardCache.get(ck),reason:null,recovered:false};if(set&&num&&prefetchMisses.has(ck))return{card:null,reason:prefetchMisses.get(ck)};let url;if(set&&num)url=`https://api.scryfall.com/cards/${encodeURIComponent(set)}/${encodeURIComponent(num)}`;else if(name)url=`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(name)}`;else return{card:null,reason:"printing_identifier_missing"};try{const r=await scryfallFetch(url);if(r.ok){const c=await r.json();cardCache.set(ck,c);return{card:c,reason:null,recovered:false}}return{card:null,reason:r.status===404?'scryfall_exact_print_not_found':'scryfall_lookup_failed'}}catch{return{card:null,reason:'scryfall_lookup_failed'}}}
+async function fetchCard(item){
+  const set=String(item.set||'').toLowerCase(),num=String(item.collector_number||''),name=String(item.card_name||item.name||'');
+  const ck=set&&num?`${set}:${num}`:`name:${name.toLowerCase()}`;
+  if(cardCache.has(ck))return{card:cardCache.get(ck),reason:null,recovered:false};
+  if(set&&num&&prefetchMisses.has(ck)){
+    const fb=await searchFallback(item);
+    if(fb.card){cardCache.set(ck,fb.card);prefetchMisses.delete(ck);return{card:fb.card,reason:null,recovered:true}}
+    return{card:null,reason:fb.reason||prefetchMisses.get(ck)||'scryfall_exact_print_not_found'};
+  }
+  let url;
+  if(set&&num)url=`https://api.scryfall.com/cards/${encodeURIComponent(set)}/${encodeURIComponent(num)}`;
+  else if(name)url=`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(name)}`;
+  else return{card:null,reason:'printing_identifier_missing'};
+  try{
+    const r=await scryfallFetch(url);
+    if(r.ok){const c=await r.json();cardCache.set(ck,c);return{card:c,reason:null,recovered:false}}
+    if(r.status===404&&name){
+      const fb=await searchFallback(item);
+      if(fb.card){cardCache.set(ck,fb.card);prefetchMisses.delete(ck);return{card:fb.card,reason:null,recovered:true}}
+      return{card:null,reason:fb.reason||'scryfall_exact_print_not_found'};
+    }
+    return{card:null,reason:'scryfall_lookup_failed'};
+  }catch{return{card:null,reason:'scryfall_lookup_failed'}}
+}
 
 function referenceKey(item){return `refprice:v4:${String(item.set||'').toLowerCase()}:${String(item.collector_number||'').toLowerCase()}:${finishOf(item.finish)}`}
 async function readReferenceCache(item){try{const c=await store().get(referenceKey(item),{type:"json",consistency:"strong"});if(c?.date===day()&&Number(c.price)>0)return{price:Number(c.price),source:c.source,cache_hit:true,card_id:c.card_id||null,failure_reason:null,resolver_recovered:Boolean(c.resolver_recovered)}}catch{}return null}
