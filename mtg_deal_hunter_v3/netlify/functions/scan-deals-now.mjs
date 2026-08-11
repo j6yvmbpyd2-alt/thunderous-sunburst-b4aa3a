@@ -4,7 +4,7 @@ import { store, json } from './_shared.mjs';
 export default async()=>{
   try{
     const started=Date.now();
-    await runScan({mode:'manual',recoveryLimit:6,prefetchFallbackLimit:2});
+    await runScan({mode:'manual',recoveryLimit:24,prefetchFallbackLimit:4});
     const feed=(await store().get('feed',{type:'json',consistency:'strong'}).catch(()=>null))||{};
     return json({
       ok:true,
