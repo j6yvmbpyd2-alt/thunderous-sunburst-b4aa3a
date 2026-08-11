@@ -4,7 +4,10 @@ import { store, json } from './_shared.mjs';
 export default async()=>{
   try{
     const started=Date.now();
-    await runScan({mode:'manual',recoveryLimit:24,prefetchFallbackLimit:4});
+    // Manual refresh must stay comfortably below Scryfall's rate limit and Netlify's request timeout.
+    // Successful identity resolutions are cached, so repeated refreshes can expand coverage gradually
+    // without trying to resolve the whole unresolved pool in a single request.
+    await runScan({mode:'manual',recoveryLimit:8,prefetchFallbackLimit:0});
     const feed=(await store().get('feed',{type:'json',consistency:'strong'}).catch(()=>null))||{};
     return json({
       ok:true,
