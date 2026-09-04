@@ -1,89 +1,20 @@
 import { json, store } from "./_shared.mjs";
-
-function avg(a){return a.length?a.reduce((s,x)=>s+x,0)/a.length:null}
-function pct(a,b){return a>0&&b>0?((a-b)/b)*100:0}
-function clamp(n,min,max){return Math.max(min,Math.min(max,n))}
-function quantile(sorted,q){
-  if(!sorted.length)return null;
-  const p=(sorted.length-1)*q,lo=Math.floor(p),hi=Math.ceil(p);
-  if(lo===hi)return sorted[lo];
-  return sorted[lo]+(sorted[hi]-sorted[lo])*(p-lo);
-}
-function trend(prices){
-  if(prices.length<2)return 'Building history';
-  const last=prices.at(-1),prev=prices.at(-2),a6=avg(prices.slice(-6)),a24=avg(prices.slice(-24));
-  const one=pct(last,prev),v6=a6?pct(last,a6):0,v24=a24?pct(last,a24):0;
-  if(one>=4&&v24>=3)return 'Overheated';
-  if(one>=1&&v6<=0)return 'Reversing';
-  if(one>0&&v6>0)return 'Rising';
-  if(one<=0&&v6<=-2)return 'Falling';
-  if(Math.abs(one)<1&&Math.abs(v6)<1.5)return 'Bottoming';
-  return one>=0?'Firming':'Softening';
-}
-
-async function historicalFor(req,id){
-  try{
-    const url=new URL('/data/mtgjson-history.json',req.url);
-    const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(4000)});
-    if(!r.ok)return null;
-    const d=await r.json();
-    const rec=d?.cards?.[id];
-    if(!rec||!Array.isArray(rec.points))return null;
-    return {meta:{source:d.source,provider:rec.provider||d.provider,resolution:d.resolution||'daily'},points:rec.points};
-  }catch{return null}
-}
-
-export default async(req)=>{
-  try{
-    const id=new URL(req.url).searchParams.get('id');
-    if(!id)return json({ok:false,error:'Missing card id'},400);
-    const data=await store().get('top20-tracker',{type:'json',consistency:'strong'}).catch(()=>null);
-    if(!data)return json({ok:false,error:'Tracker has not run yet'},404);
-    const card=(data.top20||[]).find(x=>x.id===id);
-    const livePoints=Array.isArray(data.history?.[id])?data.history[id]:[];
-    if(!card)return json({ok:false,error:'Card is not in the current Top 20'},404);
-
-    const hist=await historicalFor(req,id);
-    const daily=(hist?.points||[]).map(x=>({t:Date.parse(x.date+'T12:00:00Z'),price:Number(x.price),source:'MTGJSON daily'})).filter(x=>x.t&&x.price>0);
-    const live=livePoints.map(x=>({t:Number(x.t),price:Number(x.price),source:'live hourly'})).filter(x=>x.t&&x.price>0);
-    const all=[...daily,...live].sort((a,b)=>a.t-b.t);
-    const historicalPrices=daily.map(x=>x.price);
-    const livePrices=live.map(x=>x.price);
-    const basis=historicalPrices.length>=14?historicalPrices:livePrices;
-    const sorted=[...basis].sort((a,b)=>a-b);
-    const current=Number(card.price)||livePrices.at(-1)||historicalPrices.at(-1)||null;
-    const med=quantile(sorted,.5),q25=quantile(sorted,.25),q10=quantile(sorted,.10),mean=avg(basis);
-    const fairBuy=med?Math.min(med*.96,q25||med):current;
-    const strongBuy=q10?Math.min(q10,fairBuy*.94):fairBuy?fairBuy*.94:current;
-    const below=sorted.filter(x=>x<=current).length;
-    const percentile=sorted.length?Math.round((below/sorted.length)*100):null;
-
-    const historicalConfidence=clamp(Math.round(historicalPrices.length/90*95),0,95);
-    const liveConfidence=clamp(Math.round(livePrices.length/24*95),5,95);
-    const edge=fairBuy&&current?Math.max(0,pct(fairBuy,current)):0;
-    const modelConfidence=Number(card.confidence)||50;
-    const buyConfidence=clamp(Math.round(modelConfidence*.30+historicalConfidence*.35+liveConfidence*.20+Math.min(15,edge*1.5)),20,97);
-
-    const liveTrend=trend(livePrices.length?livePrices:historicalPrices.slice(-7));
-    let decision='WAIT';
-    if(current&&strongBuy&&current<=strongBuy&&buyConfidence>=70)decision='BUY';
-    else if(current&&fairBuy&&current<=fairBuy&&buyConfidence>=60)decision='BUY';
-    else if(card.action==='PASS'||liveTrend==='Overheated')decision='PASS';
-
-    const daily30=historicalPrices.slice(-30),daily90=historicalPrices.slice(-90),range24=livePrices.slice(-24);
-    return json({
-      ok:true,
-      card,
-      intelligence:{
-        current,mean,median:med,fair_buy:fairBuy,strong_buy:strongBuy,percentile,trend:liveTrend,decision,buy_confidence:buyConfidence,
-        historical_confidence:historicalConfidence,live_confidence:liveConfidence,
-        historical_points:historicalPrices.length,live_points:livePrices.length,history_points:all.length,
-        avg24:avg(range24),low24:range24.length?Math.min(...range24):null,high24:range24.length?Math.max(...range24):null,
-        avg30:avg(daily30),low30:daily30.length?Math.min(...daily30):null,high30:daily30.length?Math.max(...daily30):null,
-        avg90:avg(daily90),low90:daily90.length?Math.min(...daily90):null,high90:daily90.length?Math.max(...daily90):null,
-        history_source:hist?.meta||null
-      },
-      history:all
-    });
-  }catch(e){return json({ok:false,error:e.message||'Intelligence lookup failed'},500)}
-};
+const avg=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null,pct=(a,b)=>a>0&&b>0?((a-b)/b)*100:0,clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
+function quantile(s,q){if(!s.length)return null;const p=(s.length-1)*q,l=Math.floor(p),h=Math.ceil(p);return l===h?s[l]:s[l]+(s[h]-s[l])*(p-l)}const median=a=>quantile([...a].sort((x,y)=>x-y),.5),slope=(a,n)=>{const x=a.slice(-n);return x.length<2?0:pct(x.at(-1),x[0])};
+function grade(s){return s>=90?'A':s>=80?'B':s>=68?'C':s>=55?'D':'F'}
+function pickPrice(c,f){const p=c?.prices||{};if(f==='foil')return Number(p.usd_foil)||null;if(f==='etched')return Number(p.usd_etched)||null;if(f==='nonfoil')return Number(p.usd)||null;return Number(p.usd)||Number(p.usd_foil)||Number(p.usd_etched)||null}
+function demandFromRank(rank){const r=Number(rank);if(!r)return 5;if(r<=1000)return 10;if(r<=5000)return 8;if(r<=15000)return 6;if(r<=30000)return 5;return 4}
+async function fetchExact(id){try{const r=await fetch(`https://api.scryfall.com/cards/${encodeURIComponent(id)}`,{headers:{'user-agent':'MTGDealHunter/4.6','accept':'application/json'},signal:AbortSignal.timeout(4500)});return r.ok?await r.json():null}catch{return null}}
+async function fallbackHistorical(req,id){try{const r=await fetch(new URL('/data/mtgjson-history.json',req.url),{cache:'no-store',signal:AbortSignal.timeout(4000)});if(!r.ok)return null;const d=await r.json(),rec=d?.cards?.[id];return rec?.points?.length?{meta:{source:d.source,provider:rec.provider||d.provider,resolution:d.resolution||'daily',finish:rec.finish||'normal',list:rec.list||'retail'},points:rec.points}:null}catch{return null}}
+async function reprintProfile(id,knownCard=null){try{const headers={'user-agent':'MTGDealHunter/4.6','accept':'application/json'},card=knownCard||await fetchExact(id);if(!card)return null;let prints=[];if(card.prints_search_uri){const p=await fetch(card.prints_search_uri,{headers,signal:AbortSignal.timeout(5000)});if(p.ok){const d=await p.json();prints=Array.isArray(d.data)?d.data:[]}}const now=Date.now(),days=d=>d?Math.floor((now-Date.parse(d+'T12:00:00Z'))/86400000):99999,recent180=prints.filter(x=>days(x.released_at)<=180).length,recent365=prints.filter(x=>days(x.released_at)<=365).length,total=prints.length||1,latest=prints.map(x=>x.released_at).filter(Boolean).sort().at(-1)||card.released_at||null;let score=0;if(!card.reserved){if(recent180>=2)score+=55;else if(recent180===1)score+=28;if(recent365>=3)score+=25;else if(recent365===2)score+=14;if(total>=15)score+=15;else if(total>=8)score+=8;if(card.reprint)score+=8;if(days(latest)<=90)score+=8;}score=clamp(score,0,100);const level=card.reserved?'LOW':score>=65?'HIGH':score>=35?'MEDIUM':'LOW';return{level,score,total_printings:total,recent_180:recent180,recent_365:recent365,latest_release:latest,current_is_reprint:Boolean(card.reprint),reserved:Boolean(card.reserved),days_since_latest:days(latest)}}catch{return null}}
+export default async req=>{try{const u=new URL(req.url),id=u.searchParams.get('id'),finish=(u.searchParams.get('finish')||'any').toLowerCase();if(!id)return json({ok:false,error:'Missing card id'},400);const [data,exact]=await Promise.all([store().get('top20-tracker',{type:'json',consistency:'strong'}).catch(()=>null),fetchExact(id)]);if(!exact)return json({ok:false,error:'Exact printing could not be loaded'},404);const ranked=(data?.top20||[]).find(x=>x.id===id),livePoints=Array.isArray(data?.history?.[id])?data.history[id]:[],exactPrice=pickPrice(exact,finish),card=ranked?{...ranked,price:exactPrice||ranked.price}:{id:exact.id,name:exact.name,set:exact.set,set_name:exact.set_name,collector_number:exact.collector_number,price:exactPrice,action:'WATCH',confidence:50,signal:{demand:demandFromRank(exact.edhrec_rank)},image:exact.image_uris?.normal||exact.card_faces?.[0]?.image_uris?.normal||null,scryfall_uri:exact.scryfall_uri,unranked:true};
+const shared=data?.historical?.[id],[hist,reprints]=await Promise.all([shared?.points?.length?Promise.resolve({meta:{source:'Top 20 shared MTGJSON series',provider:shared.provider||'tcgplayer',resolution:'daily',finish:shared.finish||'normal',list:shared.list||'retail'},points:shared.points}):fallbackHistorical(req,id),reprintProfile(id,exact)]),daily=(hist?.points||[]).map(x=>({t:Date.parse(x.date+'T12:00:00Z'),price:Number(x.price),source:'MTGJSON daily'})).filter(x=>x.t&&x.price>0),live=livePoints.map(x=>({t:Number(x.t),price:Number(x.price),source:'live hourly'})).filter(x=>x.t&&x.price>0),hp=daily.map(x=>x.price),lp=live.map(x=>x.price),current=Number(card.price)||lp.at(-1)||hp.at(-1)||null,historicalCurrent=hp.at(-1)||null;
+const d30=hp.slice(-30),d90=hp.slice(-90),d14=hp.slice(-14),prior=hp.slice(-74,-14),sorted=[...d90].sort((a,b)=>a-b),m30=median(d30),m90=median(d90),m14=median(d14),mp=median(prior),q10=quantile(sorted,.1),q25=quantile(sorted,.25),q75=quantile(sorted,.75),iqr=q25!=null&&q75!=null?q75-q25:null,outlier=iqr>0?d90.filter(x=>x<q25-1.5*iqr||x>q75+1.5*iqr).length/Math.max(1,d90.length):0,regimeDelta=m14&&mp?pct(m14,mp):0,regime=hp.length>=30&&Math.abs(regimeDelta)>=35,baseline=hp.length<14?35:regime?45:outlier>.25?55:outlier>.15?70:90;
+const s7=slope(hp,7),s14=slope(hp,14),s30=slope(hp,30),last7=hp.slice(-7),range7=last7.length?100*(Math.max(...last7)-Math.min(...last7))/Math.max(.01,avg(last7)):99,stabilized=last7.length>=7&&range7<=4&&s7>=-2,reversing=hp.length>=8&&s7>1&&s14<=0,fallingKnife=(s14<=-5&&s7<-1)||(s30<=-10&&s14<-2),bottomConfirmed=stabilized||reversing;
+const fair=m30?Math.min(m30*.96,q25||m30):historicalCurrent||current,strong=q10?Math.min(q10,fair*.94):fair?fair*.94:historicalCurrent||current,rawMaxBuy=strong||fair||current,reprintLevel=reprints?.level||'UNKNOWN',reprintFactor=reprintLevel==='HIGH'?.92:reprintLevel==='MEDIUM'?.96:1,maxBuy=rawMaxBuy?rawMaxBuy*reprintFactor:rawMaxBuy,percentile=sorted.length&&historicalCurrent?Math.round(sorted.filter(x=>x<=historicalCurrent).length/sorted.length*100):null,gap=historicalCurrent&&current?Math.abs(pct(current,historicalCurrent)):null,consistency=gap==null?35:gap<=8?95:gap<=15?85:gap<=25?70:gap<=40?55:35,hc=clamp(Math.round(hp.length/90*95),0,95),lc=clamp(Math.round(lp.length/24*95),5,95),edge=fair&&historicalCurrent?Math.max(0,pct(fair,historicalCurrent)):0;
+let confidence=clamp(Math.round((Number(card.confidence)||50)*.20+hc*.22+lc*.12+consistency*.18+baseline*.16+Math.min(8,edge)+(bottomConfirmed?5:0)),20,95);if(card.unranked)confidence=Math.min(confidence,79);if(hp.length<14)confidence=Math.min(confidence,54);if(consistency<80||baseline<80)confidence=Math.min(confidence,82);if(consistency<65||baseline<65)confidence=Math.min(confidence,67);if(regime)confidence=Math.min(confidence,62);if(fallingKnife&&!bottomConfirmed)confidence=Math.min(confidence,59);if(reprintLevel==='HIGH')confidence=Math.min(confidence,69);else if(reprintLevel==='MEDIUM')confidence=Math.min(confidence,79);if(!reprints)confidence=Math.min(confidence,84);confidence=Math.min(confidence,89);
+const demand=Number(card.signal?.demand||0),liquidity=demand>=9?'HIGH':demand>=6?'MEDIUM':'LOW';let decision='WAIT',trigger='';const priceGate=current!=null&&maxBuy!=null&&current<=maxBuy;const eligible=hp.length>=14&&historicalCurrent&&confidence>=60&&consistency>=65&&baseline>=65&&!regime&&priceGate&&!fallingKnife&&bottomConfirmed;if(eligible&&(historicalCurrent<=fair||historicalCurrent<=strong))decision='BUY';else if(card.action==='PASS')decision='PASS';if(!priceGate)trigger=`WAIT until price is at or below ${Number(maxBuy||0).toLocaleString(undefined,{style:'currency',currency:'USD'})}${reprintLevel==='HIGH'?' (reprint-risk adjusted)':''}.`;else if(fallingKnife&&!bottomConfirmed)trigger='WAIT for bottom confirmation: 7-day price range ≤4% with 7-day decline no worse than 2%, or a confirmed short-term reversal.';else if(!bottomConfirmed)trigger='WAIT for at least 7 days of price stabilization or a confirmed short-term reversal.';else if(decision==='BUY')trigger=`Entry conditions confirmed at or below ${Number(maxBuy).toLocaleString(undefined,{style:'currency',currency:'USD'})}.`;else trigger='WAIT for confidence and pricing evidence to improve.';
+const dataQualityScore=clamp(Math.round(hc*.28+lc*.12+consistency*.25+baseline*.25+(shared?.points?.length?10:0)),0,100),dataQualityGrade=grade(dataQualityScore),risk=regime||fallingKnife||reprintLevel==='HIGH'?'HIGH':baseline<65||consistency<65?'HIGH':baseline<80||consistency<80||reprintLevel==='MEDIUM'?'MEDIUM':'LOW';let position=decision!=='BUY'?{min:0,max:0,label:'No new position'}:confidence>=85&&dataQualityScore>=85?{min:25,max:40,label:'Strong evidence'}:confidence>=70&&dataQualityScore>=75?{min:15,max:25,label:'Moderate position'}:{min:5,max:15,label:'Speculative position'};if(decision==='BUY'&&liquidity==='MEDIUM')position={min:Math.min(position.min,15),max:Math.min(position.max,25),label:'Reduced for medium liquidity'};if(decision==='BUY'&&liquidity==='LOW')position={min:Math.min(position.min,5),max:Math.min(position.max,15),label:'Reduced for low liquidity'};if(decision==='BUY'&&reprintLevel==='MEDIUM')position={min:Math.min(position.min,10),max:Math.min(position.max,20),label:'Reduced for reprint risk'};if(decision==='BUY'&&reprintLevel==='HIGH')position={min:Math.min(position.min,5),max:Math.min(position.max,10),label:'Small position due to high reprint risk'};
+let suggestedPurchase=0,suggestedBuys={min:0,max:0,target:0,label:'No buy'};if(decision==='BUY'&&current>0&&position.max>0){let copyCap=liquidity==='HIGH'?8:liquidity==='MEDIUM'?6:4;if(reprintLevel==='HIGH')copyCap=Math.min(copyCap,3);else if(reprintLevel==='MEDIUM')copyCap=Math.min(copyCap,5);const minCopies=Math.max(1,Math.min(copyCap,Math.ceil(position.min/current))),maxCopies=Math.max(minCopies,Math.min(copyCap,Math.floor(position.max/current)||1)),targetCopies=Math.max(minCopies,Math.min(maxCopies,Math.round(((position.min+position.max)/2)/current))),targetDollars=targetCopies*current;suggestedPurchase=+targetDollars.toFixed(2);suggestedBuys={min:minCopies,max:maxCopies,target:targetCopies,label:minCopies===maxCopies?`${minCopies} cop${minCopies===1?'y':'ies'}`:`${minCopies}–${maxCopies} copies`};}
+const why=[],risks=[];if(percentile!=null&&percentile<=20)why.push(`Price is in the bottom ${percentile}% of its 90-day range.`);if(m30&&historicalCurrent<m30)why.push(`Current historical reference is ${Math.abs(pct(historicalCurrent,m30)).toFixed(1)}% below the robust 30-day median.`);if(consistency>=80)why.push('Live and historical pricing sources agree closely.');if(demand>=8)why.push('Commander demand signal is strong.');if(bottomConfirmed)why.push(stabilized?'Seven-day price action meets stabilization criteria.':'Short-term reversal confirmation detected.');if(reprints?.reserved)why.push('Reserved List status materially lowers normal reprint risk.');if(card.unranked)risks.push('This printing is outside the current Top 20, so demand confidence uses a broader Commander-demand proxy.');if(fallingKnife)risks.push(`Falling-knife warning: 7d ${s7.toFixed(1)}%, 14d ${s14.toFixed(1)}%, 30d ${s30.toFixed(1)}%.`);if(!bottomConfirmed)risks.push('Bottom is not confirmed yet. Historical cheapness alone cannot trigger BUY.');if(!priceGate)risks.push('Live price is above the reprint-risk-adjusted maximum buy price.');if(regime)risks.push('Structural repricing detected; older prices may no longer be relevant.');if(baseline<80)risks.push('Historical baseline quality is limited.');if(consistency<80)risks.push('Pricing sources do not agree closely enough for maximum confidence.');if(liquidity==='LOW')risks.push('Demand proxy suggests higher exit/liquidity risk.');if(reprintLevel==='HIGH')risks.push(`High reprint/supply risk: ${reprints.recent_180} printing(s) in 180d, ${reprints.recent_365} in 365d, ${reprints.total_printings} known printings.`);else if(reprintLevel==='MEDIUM')risks.push(`Moderate reprint/supply risk: ${reprints.recent_365} printing(s) in 365d across ${reprints.total_printings} known printings.`);else if(!reprints)risks.push('Reprint-risk lookup is unavailable, so conviction is reduced.');risks.push('Verified transaction-volume evidence is not yet available, so confidence remains capped below 90%.');if(!why.length)why.push('No unusually strong evidence edge is present yet.');
+const r24=lp.slice(-24),all=[...daily,...live].sort((a,b)=>a.t-b.t);return json({ok:true,card:{...card,finish},intelligence:{current,historical_current:historicalCurrent,source_gap_pct:gap==null?null:+gap.toFixed(2),pricing_consistency:consistency,baseline_quality:baseline,regime_shift:regime,regime_delta:+regimeDelta.toFixed(2),outlier_share:+outlier.toFixed(3),median30:m30,median90:m90,fair_buy:fair,strong_buy:strong,raw_max_buy:rawMaxBuy,max_buy:maxBuy,percentile,decision,buy_confidence:confidence,evidence_grade:dataQualityGrade,evidence_score:dataQualityScore,data_quality_grade:dataQualityGrade,data_quality_score:dataQualityScore,liquidity,risk,position,suggested_purchase_amount:suggestedPurchase,suggested_buys:suggestedBuys,why,risks,entry_trigger:trigger,falling_knife:fallingKnife,bottom_confirmed:bottomConfirmed,stabilized,reversing,slope7:+s7.toFixed(2),slope14:+s14.toFixed(2),slope30:+s30.toFixed(2),range7:+range7.toFixed(2),reprint_risk:reprintLevel,reprint_score:reprints?.score??null,reprint_profile:reprints,historical_confidence:hc,live_confidence:lc,historical_points:hp.length,live_points:lp.length,history_points:all.length,avg24:avg(r24),low24:r24.length?Math.min(...r24):null,high24:r24.length?Math.max(...r24):null,avg30:avg(d30),low30:d30.length?Math.min(...d30):null,high30:d30.length?Math.max(...d30):null,avg90:avg(d90),low90:d90.length?Math.min(...d90):null,high90:d90.length?Math.max(...d90):null,history_source:hist?.meta||null,shared_history_used:Boolean(shared?.points?.length)},history:all})}catch(e){return json({ok:false,error:e.message||'Intelligence lookup failed'},500)}};
